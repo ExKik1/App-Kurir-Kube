@@ -1,0 +1,6 @@
+{
+  "name": "Kube",
+  "description": "A specialized courier mobile application for cold-chain ice block and crystal ice delivery service with real-time tracking, jobdesk queues, and liquid glassmorphism design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

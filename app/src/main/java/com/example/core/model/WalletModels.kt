@@ -1,0 +1,63 @@
+package com.example.core.model
+
+/**
+ * Status of courier withdrawal request.
+ */
+enum class WithdrawalStatus(val label: String) {
+    WAITING("Menunggu"),
+    PROCESSING("Diproses"),
+    SUCCESS("Berhasil"),
+    REJECTED("Ditolak")
+}
+
+/**
+ * Represents a withdrawal record to the courier's bank account.
+ */
+data class WithdrawalHistoryItem(
+    val id: String,
+    val bankName: String = "BCA",
+    val accountNumberMasked: String = "**** **** 2831",
+    val recipientName: String = "MARYONO SUPARDI",
+    val amount: Long,
+    val date: String,
+    val status: WithdrawalStatus,
+    val rejectionReason: String? = null
+)
+
+/**
+ * Represents an item in the courier's commission & tip history.
+ */
+data class CommissionHistoryItem(
+    val id: String,
+    val orderId: String,
+    val title: String, // e.g. "Komisi 8 balok es - Rp45.000" or "Tip Pelanggan - Rp20.000"
+    val subtitle: String, // e.g. "Toko Es Segar · Hari Ini, 09:45"
+    val amount: Long,
+    val isTip: Boolean = false,
+    val timestamp: String
+)
+
+/**
+ * Breakdown of courier balances into 3 distinct categories:
+ * - pendingBalance: Earnings pending verification or in transit (amber/yellow)
+ * - availableBalance: Balance ready to withdraw (green)
+ * - withdrawnBalance: Total balance already successfully withdrawn (blue)
+ */
+data class WalletBalance(
+    val pendingBalance: Long = 145000L,
+    val availableBalance: Long = 850000L,
+    val withdrawnBalance: Long = 2450000L
+)
+
+/**
+ * Masks a bank account number for security:
+ * e.g. "8830192831" -> "**** **** 2831"
+ */
+fun maskAccountNumber(accountNumber: String): String {
+    val clean = accountNumber.replace(" ", "").trim()
+    return if (clean.length > 4) {
+        "**** **** " + clean.takeLast(4)
+    } else {
+        "**** **** $clean"
+    }
+}
