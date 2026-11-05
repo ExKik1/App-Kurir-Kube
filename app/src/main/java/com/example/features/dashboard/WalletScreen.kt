@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -542,25 +543,26 @@ fun WalletScreen(
         }
 
         // ==========================================
-        // DIALOG: TARIK SALDO DANA
+        // DIALOG / BOTTOM SHEET: TARIK SALDO DANA (RULE 2)
         // ==========================================
         if (showWithdrawDialog) {
-            WithdrawalModalDialog(
+            WithdrawalModalBottomSheet(
                 availableBalance = walletBalance.availableBalance,
                 bankAccountMasked = maskAccountNumber(courier.bankAccountNumber),
                 accountHolder = courier.bankAccountHolder,
                 onDismiss = { showWithdrawDialog = false },
                 onConfirmWithdraw = { amount ->
-                    val success = repository.requestWithdrawal(amount)
-                    showWithdrawDialog = false
-                    if (success) {
+                    val result = repository.requestWithdrawal(amount)
+                    if (result.isSuccess) {
+                        showWithdrawDialog = false
                         selectedTab = 1 // Switch to Riwayat Pencairan to show new status
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar(
-                                "Pengajuan pencairan ${formatRupiah(amount)} berhasil dikirim! Status: Menunggu verifikasi."
+                                "Pengajuan penarikan dana berhasil dikirim. Admin akan memproses transfer Anda segera."
                             )
                         }
                     }
+                    result
                 }
             )
         }
@@ -984,122 +986,245 @@ private fun WithdrawalStatusBadge(status: WithdrawalStatus) {
 }
 
 /**
- * Modal dialog for requesting balance withdrawal to BCA.
+ * ATURAN 2: Alur UI Pengajuan Penarikan Dana (Withdrawal Modal Bottom Sheet)
+ * - Munculkan ModalBottomSheet untuk konfirmasi jumlah nominal yang ditarik dan rincian rekening tujuan (yang di-masking: BCA ****2831).
+ * - Saat dikonfirmasi, ubah state tombol menjadi loading (CircularProgressIndicator).
+ * - Setelah berhasil insert ke Supabase, tutup bottom sheet dan munculkan dialog/snackbar:
+ *   'Pengajuan penarikan dana berhasil dikirim. Admin akan memproses transfer Anda segera.'
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun WithdrawalModalDialog(
+private fun WithdrawalModalBottomSheet(
     availableBalance: Long,
     bankAccountMasked: String,
     accountHolder: String,
     onDismiss: () -> Unit,
-    onConfirmWithdraw: (Long) -> Unit
+    onConfirmWithdraw: suspend (Long) -> Result<WithdrawalHistoryItem>
 ) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var amountInput by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = "Tarik Saldo ke Rekening",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = KubeTextDark
-            )
-        },
-        text = {
-            Column(
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        sheetState = sheetState,
+        containerColor = Color(0xFFF8FAFC),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        modifier = Modifier
+            .imePadding()
+            .testTag("sheet_tarik_dana")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 36.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Bank info
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFFF0F9FF),
-                    border = BorderStroke(1.dp, Color(0xFFBAE6FD)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AccountBalance,
-                            contentDescription = null,
-                            tint = Color(0xFF0284C7),
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "BCA • $bankAccountMasked",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = KubeTextDark
-                            )
-                            Text(
-                                text = "a.n. $accountHolder",
-                                fontSize = 11.sp,
-                                color = KubeTextMuted
-                            )
-                        }
-                    }
-                }
-
-                Text(
-                    text = "Maksimal saldo siap cair: ${formatRupiah(availableBalance)}",
-                    fontSize = 12.sp,
-                    color = Color(0xFF059669),
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                // Input Field
-                OutlinedTextField(
-                    value = amountInput,
-                    onValueChange = { input ->
-                        val digits = input.filter { it.isDigit() }
-                        amountInput = digits
-                        errorMessage = null
-                    },
-                    label = { Text("Nominal Penarikan (Rp)") },
-                    placeholder = { Text("Contoh: 500000") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    isError = errorMessage != null,
-                    supportingText = errorMessage?.let { { Text(it, color = Color(0xFFDC2626)) } },
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = KubeBlueBright,
-                        unfocusedBorderColor = Color.LightGray
-                    ),
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("input_nominal_penarikan")
-                )
-
-                // Quick buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE0F2FE)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    QuickAmountChip(
-                        label = "Rp 100rb",
-                        onClick = { amountInput = "100000"; errorMessage = null },
-                        modifier = Modifier.weight(1f)
+                    Icon(
+                        imageVector = Icons.Filled.AccountBalance,
+                        contentDescription = null,
+                        tint = Color(0xFF0284C7),
+                        modifier = Modifier.size(26.dp)
                     )
-                    QuickAmountChip(
-                        label = "Rp 500rb",
-                        onClick = { amountInput = "500000"; errorMessage = null },
-                        modifier = Modifier.weight(1f)
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Konfirmasi Penarikan Dana",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = KubeTextDark
                     )
-                    QuickAmountChip(
-                        label = "Semua",
-                        onClick = { amountInput = availableBalance.toString(); errorMessage = null },
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = "Pengajuan manual ke Web Admin Kube",
+                        fontSize = 12.sp,
+                        color = KubeTextMuted
                     )
                 }
             }
-        },
-        confirmButton = {
+
+            // Rincian Rekening Tujuan (Masking BCA)
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.White,
+                border = BorderStroke(1.dp, Color(0xFFBAE6FD)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFE3F2FD)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AccountBalance,
+                            contentDescription = "BCA",
+                            tint = Color(0xFF0D47A1),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Rekening Tujuan Transfer (BCA)",
+                            fontSize = 11.sp,
+                            color = KubeTextMuted
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "BCA • $bankAccountMasked",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KubeTextDark
+                        )
+                        Spacer(modifier = Modifier.height(1.dp))
+                        Text(
+                            text = "a.n. $accountHolder",
+                            fontSize = 12.sp,
+                            color = Color(0xFF0284C7),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFE8F5E9)) {
+                        Text(
+                            text = "Terdaftar",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF2E7D32),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            // Batas Saldo Info
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFFECFDF5),
+                border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF059669),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Saldo Siap Cair: ${formatRupiah(availableBalance)}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF065F46)
+                    )
+                }
+            }
+
+            // Input Field
+            OutlinedTextField(
+                value = amountInput,
+                onValueChange = { input ->
+                    if (!isLoading) {
+                        val digits = input.filter { it.isDigit() }
+                        amountInput = digits
+                        errorMessage = null
+                    }
+                },
+                enabled = !isLoading,
+                label = { Text("Nominal Penarikan (Rp)") },
+                placeholder = { Text("Contoh: 500000") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                isError = errorMessage != null,
+                supportingText = errorMessage?.let { { Text(it, color = Color(0xFFDC2626)) } },
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = KubeBlueBright,
+                    unfocusedBorderColor = Color.LightGray
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("input_nominal_penarikan")
+            )
+
+            // Quick nominal buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                QuickAmountChip(
+                    label = "Rp 100rb",
+                    onClick = { if (!isLoading) { amountInput = "100000"; errorMessage = null } },
+                    modifier = Modifier.weight(1f)
+                )
+                QuickAmountChip(
+                    label = "Rp 500rb",
+                    onClick = { if (!isLoading) { amountInput = "500000"; errorMessage = null } },
+                    modifier = Modifier.weight(1f)
+                )
+                QuickAmountChip(
+                    label = "Semua Saldo",
+                    onClick = { if (!isLoading) { amountInput = availableBalance.toString(); errorMessage = null } },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Notice Manual Admin Transfer
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = Color(0xFFFFFBEB),
+                border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = Color(0xFFD97706),
+                        modifier = Modifier
+                            .size(18.dp)
+                            .padding(top = 1.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Transfer dilakukan secara manual oleh Web Admin setelah memverifikasi buku tabungan. Status saldo akan berstatus 'Menunggu' hingga dana masuk.",
+                        fontSize = 11.sp,
+                        color = Color(0xFF92400E),
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Action Button with Loading Indicator
             Button(
                 onClick = {
                     val amount = amountInput.toLongOrNull() ?: 0L
@@ -1114,26 +1239,50 @@ private fun WithdrawalModalDialog(
                             errorMessage = "Minimal penarikan adalah Rp 50.000"
                         }
                         else -> {
-                            onConfirmWithdraw(amount)
+                            isLoading = true
+                            errorMessage = null
+                            coroutineScope.launch {
+                                val result = onConfirmWithdraw(amount)
+                                isLoading = false
+                                if (result.isFailure) {
+                                    errorMessage = result.exceptionOrNull()?.message ?: "Gagal memproses penarikan"
+                                }
+                            }
                         }
                     }
                 },
+                enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("btn_konfirmasi_penarikan")
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("btn_konfirmasi_penarikan")
             ) {
-                Text("Konfirmasi Penarikan", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            OutlinedButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("Batal")
+                if (isLoading) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        color = Color.White,
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.5.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Memproses ke Database...",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                } else {
+                    Text(
+                        text = "Kirim Pengajuan Penarikan",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
             }
         }
-    )
+    }
 }
 
 @Composable

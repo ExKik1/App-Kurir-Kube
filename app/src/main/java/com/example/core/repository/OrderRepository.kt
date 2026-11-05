@@ -459,10 +459,36 @@ class OrderRepository {
     )
     val withdrawalHistory: StateFlow<List<WithdrawalHistoryItem>> = _withdrawalHistory.asStateFlow()
 
-    fun requestWithdrawal(amount: Long): Boolean {
-        if (amount <= 0 || amount > _walletBalance.value.availableBalance) return false
+    /**
+     * ATURAN 1 & 3: Logika Database (Tabel Withdrawal) & Penguncian Saldo (Balance Lock).
+     * Saat kurir menekan 'Tarik Saldo', aplikasi melakukan simulasi INSERT ke tabel `withdrawals`
+     * di Supabase backend dengan parameter:
+     * - courier_id: CR-098 (Maryono Supardi)
+     * - amount: nominal penarikan
+     * - bank_account: nomor rekening BCA kurir
+     * - status: 'pending' (WAITING)
+     *
+     * CATATAN ARSITEKTUR BACKEND:
+     * Data penarikan berstatus 'pending' ini nantinya HANYA akan dibaca dan di-update statusnya
+     * menjadi 'success' oleh Web Admin secara manual setelah Admin mentransfer uang ke rekening kurir.
+     * Tidak ada transfer dana otomatis via gateway pada tahap ini.
+     *
+     * Saldo dipotong seketika dari 'Saldo Tersedia' dan dipindahkan ke 'Saldo Diproses/Tertunda'
+     * agar kurir tidak dapat menarik uang yang sama dua kali (Double-Withdrawal Prevention).
+     */
+    suspend fun requestWithdrawal(amount: Long): Result<WithdrawalHistoryItem> {
+        if (amount <= 0) return Result.failure(IllegalArgumentException("Nominal penarikan harus lebih dari 0"))
+        if (amount > _walletBalance.value.availableBalance) {
+            return Result.failure(IllegalStateException("Saldo tersedia tidak mencukupi untuk penarikan"))
+        }
+
+        // Simulasi network latency request INSERT ke Supabase
+        kotlinx.coroutines.delay(800)
+
         val newAvailable = _walletBalance.value.availableBalance - amount
         val newPending = _walletBalance.value.pendingBalance + amount
+
+        // ATURAN 3: Penguncian Saldo (Balance Lock)
         _walletBalance.update {
             it.copy(
                 availableBalance = newAvailable,
@@ -475,18 +501,59 @@ class OrderRepository {
                 pendingBalance = newPending
             )
         }
+
+        val withdrawalId = "WD-${(10000..99999).random()}"
         val newItem = WithdrawalHistoryItem(
-            id = "WD-${(10000..99999).random()}",
+            id = withdrawalId,
             bankName = "BCA",
             accountNumberMasked = maskAccountNumber(_courier.value.bankAccountNumber),
             recipientName = _courier.value.bankAccountHolder,
             amount = amount,
             date = "Hari ini, 10:20",
-            status = WithdrawalStatus.WAITING,
+            status = WithdrawalStatus.WAITING, // 'pending' status
             rejectionReason = null
         )
+
+        // Insert ke Riwayat Pencairan (Real-time Flow)
         _withdrawalHistory.update { listOf(newItem) + it }
-        return true
+        return Result.success(newItem)
+    }
+
+    /**
+     * ATURAN 4: Simulasi Pembaruan Status Real-Time oleh Web Admin
+     * Ketika Web Admin menyetujui transfer di dashboard admin, status di Supabase berubah menjadi 'success'.
+     * Saldo dipindahkan dari 'pendingBalance' ke 'withdrawnBalance', dan UI otomatis berubah dari Kuning (Menunggu)
+     * ke Hijau (Berhasil) secara real-time via StateFlow observer.
+     */
+    fun simulateAdminApproval(withdrawalId: String): Boolean {
+        var found = false
+        var approvedAmount = 0L
+
+        _withdrawalHistory.update { currentList ->
+            currentList.map { item ->
+                if (item.id == withdrawalId && (item.status == WithdrawalStatus.WAITING || item.status == WithdrawalStatus.PROCESSING)) {
+                    found = true
+                    approvedAmount = item.amount
+                    item.copy(status = WithdrawalStatus.SUCCESS)
+                } else item
+            }
+        }
+
+        if (found && approvedAmount > 0) {
+            _walletBalance.update {
+                it.copy(
+                    pendingBalance = (it.pendingBalance - approvedAmount).coerceAtLeast(0L),
+                    withdrawnBalance = it.withdrawnBalance + approvedAmount
+                )
+            }
+            _courier.update {
+                it.copy(
+                    pendingBalance = (it.pendingBalance - approvedAmount).coerceAtLeast(0L),
+                    withdrawnBalance = it.withdrawnBalance + approvedAmount
+                )
+            }
+        }
+        return found
     }
 
     init {

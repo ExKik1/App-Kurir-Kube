@@ -252,14 +252,14 @@ class OrderRepositoryTest {
     }
 
     @Test
-    fun wallet_requestWithdrawal_updatesBalancesCorrectly() {
+    fun wallet_requestWithdrawal_updatesBalancesCorrectly() = kotlinx.coroutines.runBlocking {
         val repo = OrderRepository()
         val initialAvailable = repo.walletBalance.value.availableBalance
         val initialPending = repo.walletBalance.value.pendingBalance
 
         val requestedAmount = 200000L
-        val success = repo.requestWithdrawal(requestedAmount)
-        assertTrue("Withdrawal request must succeed", success)
+        val result = repo.requestWithdrawal(requestedAmount)
+        assertTrue("Withdrawal request must succeed", result.isSuccess)
 
         val updatedWallet = repo.walletBalance.value
         assertEquals(initialAvailable - requestedAmount, updatedWallet.availableBalance)
@@ -269,6 +269,31 @@ class OrderRepositoryTest {
         assertEquals(requestedAmount, latestWithdrawal.amount)
         assertEquals(com.example.core.model.WithdrawalStatus.WAITING, latestWithdrawal.status)
         assertEquals("**** **** 2831", latestWithdrawal.accountNumberMasked)
+    }
+
+    @Test
+    fun wallet_adminApproval_realtimeTransitionToSuccess() = kotlinx.coroutines.runBlocking {
+        // ATURAN 4: Pembaruan Riwayat Pencairan (Real-time perubahan status dari Web Admin)
+        val repo = OrderRepository()
+        val requestedAmount = 150000L
+        val result = repo.requestWithdrawal(requestedAmount)
+        assertTrue("Request must succeed", result.isSuccess)
+        val withdrawal = result.getOrThrow()
+        assertEquals(com.example.core.model.WithdrawalStatus.WAITING, withdrawal.status)
+
+        // Web Admin melakukan verifikasi dan transfer uang secara manual, lalu menekan approve
+        val approved = repo.simulateAdminApproval(withdrawal.id)
+        assertTrue("Admin approval simulation must succeed", approved)
+
+        val updatedItem = repo.withdrawalHistory.value.find { it.id == withdrawal.id }
+        assertNotNull(updatedItem)
+        // Status otomatis berubah menjadi SUCCESS (Badge Hijau)
+        assertEquals(com.example.core.model.WithdrawalStatus.SUCCESS, updatedItem?.status)
+
+        // Saldo pending otomatis berkurang dan berpindah ke withdrawnBalance
+        val updatedWallet = repo.walletBalance.value
+        assertEquals(145000L, updatedWallet.pendingBalance) // kembali ke balance awal
+        assertEquals(2450000L + requestedAmount, updatedWallet.withdrawnBalance)
     }
 
     @Test
