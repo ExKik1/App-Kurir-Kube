@@ -77,8 +77,9 @@ fun NotificationScreen(
 ) {
     BackHandler { onBack() }
 
+    val activeCourierProfileId by CourierSupabaseService.instance.activeCourierProfileId.collectAsState()
     val notificationStream by CourierSupabaseService.instance
-        .streamNotifications()
+        .streamNotifications(activeCourierProfileId.orEmpty())
         .collectAsState(initial = emptyList())
 
     val notifications = remember(notificationStream) {

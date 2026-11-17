@@ -24,7 +24,10 @@ data class DeliveryOrder(
     val inTransitTime: String? = "09:45 | 28 Okt 2026",
     val deliveredTime: String? = null,
     val notes: String? = "Harap berhati-hati, simpan di kotak pendingin utama.",
-    val proofOfDelivery: ProofOfDelivery? = null
+    val proofOfDelivery: ProofOfDelivery? = null,
+    val paymentMethod: String = "QRIS",
+    val totalAmount: Long = 0L,
+    val unitPrice: Long = 0L
 ) {
     val category: OrderStatusCategory get() = status.category
     val isAktif: Boolean get() = status.isAktif
@@ -36,4 +39,22 @@ data class DeliveryOrder(
      */
     val defaultQuantity: Int
         get() = Regex("\\d+").find(itemDescription)?.value?.toIntOrNull() ?: 1
+
+    val isCod: Boolean
+        get() = paymentMethod.equals("COD", ignoreCase = true) ||
+            paymentMethod.contains("tunai", ignoreCase = true)
+
+    val effectiveUnitPrice: Long
+        get() = when {
+            unitPrice > 0L -> unitPrice
+            totalAmount > 0L -> totalAmount / defaultQuantity.coerceAtLeast(1)
+            else -> 0L
+        }
+
+    val effectiveTotalAmount: Long
+        get() = when {
+            totalAmount > 0L -> totalAmount
+            unitPrice > 0L -> unitPrice * defaultQuantity.coerceAtLeast(1)
+            else -> 0L
+        }
 }

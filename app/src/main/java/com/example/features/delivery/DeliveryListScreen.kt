@@ -88,11 +88,14 @@ fun DeliveryListScreen(
     onNavigateToProfile: () -> Unit
 ) {
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialOrders = remember(repository) { repository.orders.value }
     val initialCourier = remember(repository) { repository.courier.value }
+    val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
 
-    val orders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
-    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val orders by supabaseService.streamMyDeliveries(courierProfileId).collectAsState(initial = initialOrders)
+    val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
+    val notifications by supabaseService.streamNotifications(courierProfileId).collectAsState(initial = emptyList())
     val context = LocalContext.current
 
     // Initialize filter tab based on initial filter if provided

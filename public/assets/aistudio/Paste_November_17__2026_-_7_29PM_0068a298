@@ -1,0 +1,1249 @@
+package com.example.core.network
+
+import android.content.Context
+import android.net.Uri
+import android.util.Log
+import com.example.core.model.CommissionHistoryItem
+import com.example.core.model.Courier
+import com.example.core.model.DeliveryOrder
+import com.example.core.model.DeliveryStatus
+import com.example.core.model.ProofOfDelivery
+import com.example.core.model.WalletBalance
+import com.example.core.model.WithdrawalHistoryItem
+import com.example.core.model.WithdrawalStatus
+import com.example.core.model.maskAccountNumber
+import com.example.core.repository.DailyStatsProvider
+import com.example.core.repository.DailyStatsState
+import com.example.core.repository.OrderRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+data class CourierAuthSession(
+    val userId: String,
+    val courierId: String,
+    val email: String,
+    val role: String,
+    val accountStatus: String,
+    val accessToken: String? = null
+)
+
+data class CourierNotificationRecord(
+    val id: String,
+    val title: String,
+    val message: String,
+    val time: String,
+    val category: String,
+    val isUnread: Boolean = false
+)
+
+data class WarehouseInfo(
+    val id: String = "1",
+    val name: String = "Pabrik Es Kube Banyumas",
+    val address: String = "Depot Utama Kube",
+    val operationalHours: String = "24 Jam Non-Stop",
+    val facilities: String = "Cold Storage & Loading Dock Es",
+    val latitude: Double = -7.4245,
+    val longitude: Double = 109.2300
+)
+
+data class SupportContactRecord(
+    val id: Int,
+    val warehouseId: Int?,
+    val serviceType: String,
+    val contactName: String,
+    val phoneNumber: String,
+    val serviceHours: String
+)
+
+data class CourierBankAccountRecord(
+    val id: Int,
+    val courierId: Int,
+    val bankName: String,
+    val accountNumber: String,
+    val accountHolder: String,
+    val isPrimary: Boolean,
+    val verificationStatus: String
+)
+
+data class OrderPaymentMeta(
+    val orderDbId: Int,
+    val orderCode: String,
+    val paymentMethodCode: String, // e.g., "cod", "BCA", "QRIS"
+    val paymentMethodName: String, // e.g., "Tunai", "Transfer BCA", "QRIS Instan"
+    val totalAmount: Long,
+    val unitPrice: Long,
+    val commissionAmount: Long,
+    val isPaid: Boolean
+) {
+    val isCodOrder: Boolean
+        get() = paymentMethodCode.equals("cod", ignoreCase = true) ||
+                paymentMethodName.contains("tunai", ignoreCase = true)
+}
+
+class CourierSupabaseService private constructor(
+    private val repository: OrderRepository = OrderRepository.instance
+) {
+
+    companion object {
+        private const val TAG = "CourierSupabaseService"
+        const val SUPABASE_URL = "https://wopqozbstvtuhxkuciun.supabase.co"
+        const val SUPABASE_ANON_KEY = "sb_publishable_0mVVCciTLSOAi0j5FPdePQ_kc8UvQBC"
+        const val POD_STORAGE_BUCKET = "pod-photos"
+        private const val REALTIME_POLL_INTERVAL_MS = 4000L
+
+        private val sharedOkHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
+                .build()
+        }
+
+        val instance: CourierSupabaseService by lazy { CourierSupabaseService() }
+
+        fun forRepository(repository: OrderRepository): CourierSupabaseService {
+            return if (repository === OrderRepository.instance) {
+                instance
+            } else {
+                CourierSupabaseService(repository)
+            }
+        }
+    }
+
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val okHttpClient: OkHttpClient get() = sharedOkHttpClient
+
+    @Volatile private var currentAccessToken: String? = null
+    @Volatile private var currentUserUuid: String = ""
+    @Volatile private var currentCourierProfileId: Int = 0
+
+    private val realtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val isRealtimeSyncStarted = AtomicBoolean(false)
+
+    // Cache metadata order (kode order -> detail DB, harga, metode COD, komisi)
+    private val orderMetaByCode = ConcurrentHashMap<String, OrderPaymentMeta>()
+    private val deliveryIdByOrderDbId = ConcurrentHashMap<Int, Int>()
+
+    private val _warehouseInfo = MutableStateFlow(WarehouseInfo())
+    val warehouseInfo: StateFlow<WarehouseInfo> = _warehouseInfo.asStateFlow()
+
+    private val _notifications = MutableStateFlow<List<CourierNotificationRecord>>(emptyList())
+    val notifications: StateFlow<List<CourierNotificationRecord>> = _notifications.asStateFlow()
+
+    private val _supportContacts = MutableStateFlow<List<SupportContactRecord>>(emptyList())
+    val supportContacts: StateFlow<List<SupportContactRecord>> = _supportContacts.asStateFlow()
+
+    private val _bankAccounts = MutableStateFlow<List<CourierBankAccountRecord>>(emptyList())
+    val bankAccounts: StateFlow<List<CourierBankAccountRecord>> = _bankAccounts.asStateFlow()
+
+    fun getOrderMeta(orderCode: String): OrderPaymentMeta? = orderMetaByCode[orderCode]
+
+    private fun ensureRealtimeSyncStarted() {
+        if (!isRealtimeSyncStarted.compareAndSet(false, true)) return
+        realtimeScope.launch {
+            while (isActive) {
+                if (currentUserUuid.isNotBlank() || currentCourierProfileId > 0) {
+                    runCatching {
+                        syncAllTablesOnce()
+                    }.onFailure { err ->
+                        Log.w(TAG, "Realtime sync cycle warning: ${err.message}")
+                    }
+                }
+                delay(REALTIME_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    suspend fun syncAllTablesOnce() = withContext(Dispatchers.IO) {
+        if (currentUserUuid.isNotBlank()) {
+            fetchAndSyncCourierProfileByUuid(currentUserUuid)
+            fetchAndSyncOrdersAndDeliveries(currentUserUuid, currentCourierProfileId)
+        }
+        if (currentCourierProfileId > 0) {
+            fetchAndSyncBankAccounts(currentCourierProfileId)
+            fetchAndSyncWalletAndTransactions(currentCourierProfileId)
+            fetchAndSyncWithdrawals(currentCourierProfileId)
+            fetchAndSyncNotifications(currentCourierProfileId)
+        }
+        fetchAndSyncSupportContacts()
+    }
+
+    // =========================================================================
+    // 1. AUTENTIKASI & VALIDASI ROLE KURIR (users + courier_profiles)
+    // =========================================================================
+
+    suspend fun loginCourier(email: String, password: String): Result<CourierAuthSession> =
+        withContext(Dispatchers.IO) {
+            val cleanEmail = email.trim()
+            if (cleanEmail.isEmpty() || !cleanEmail.contains("@")) {
+                return@withContext Result.failure(IllegalArgumentException("Format email tidak valid."))
+            }
+            if (password.isEmpty()) {
+                return@withContext Result.failure(IllegalArgumentException("Kata sandi wajib diisi."))
+            }
+
+            try {
+                val authPayload = JSONObject().apply {
+                    put("email", cleanEmail)
+                    put("password", password)
+                }.toString()
+
+                val authRequest = Request.Builder()
+                    .url("$SUPABASE_URL/auth/v1/token?grant_type=password")
+                    .addHeader("apikey", SUPABASE_ANON_KEY)
+                    .addHeader("Content-Type", "application/json")
+                    .post(authPayload.toRequestBody(jsonMediaType))
+                    .build()
+
+                okHttpClient.newCall(authRequest).execute().use { authResponse ->
+                    val authBody = authResponse.body?.string().orEmpty()
+                    if (!authResponse.isSuccessful || authBody.isBlank()) {
+                        val errorMsg = runCatching {
+                            JSONObject(authBody).optString("error_description")
+                                .ifBlank { JSONObject(authBody).optString("msg") }
+                        }.getOrNull().orEmpty()
+                        return@withContext Result.failure(
+                            IllegalStateException(
+                                if (errorMsg.isNotBlank()) "Login gagal: $errorMsg"
+                                else "Email atau kata sandi kurir salah."
+                            )
+                        )
+                    }
+
+                    val json = JSONObject(authBody)
+                    val accessToken = json.optString("access_token")
+                    val authUserId = json.optJSONObject("user")?.optString("id").orEmpty()
+                    currentAccessToken = accessToken
+
+                    val sessionResult = fetchAndValidateCourierProfile(
+                        email = cleanEmail,
+                        authUserId = authUserId,
+                        accessToken = accessToken
+                    )
+
+                    if (sessionResult.isSuccess) {
+                        ensureRealtimeSyncStarted()
+                        realtimeScope.launch { syncAllTablesOnce() }
+                    }
+                    return@withContext sessionResult
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "loginCourier exception", e)
+                return@withContext Result.failure(
+                    IllegalStateException("Gagal terhubung ke Supabase: ${e.message}")
+                )
+            }
+        }
+
+    private fun fetchAndValidateCourierProfile(
+        email: String,
+        authUserId: String,
+        accessToken: String
+    ): Result<CourierAuthSession> {
+        return try {
+            var usersArr = if (authUserId.isNotBlank()) {
+                executeGetJsonArray("$SUPABASE_URL/rest/v1/users?select=*,roles(name)&id=eq.$authUserId")
+            } else null
+
+            if (usersArr == null || usersArr.length() == 0) {
+                usersArr = executeGetJsonArray("$SUPABASE_URL/rest/v1/users?select=*,roles(name)&email=eq.$email")
+            }
+
+            if (usersArr == null || usersArr.length() == 0) {
+                return Result.failure(SecurityException("Akun tidak ditemukan di tabel users."))
+            }
+
+            val userRow = usersArr.getJSONObject(0)
+            val dbUserId = userRow.optString("id", authUserId)
+            val roleId = userRow.optInt("role_id", -1)
+            val roleName = userRow.optJSONObject("roles")?.optString("name").orEmpty()
+            val accountStatus = userRow.optString("account_status", "active").ifBlank { "active" }
+            val userName = userRow.optString("name", "Kurir Kube")
+            val userPhone = userRow.optString("phone", "")
+
+            if (roleId != 3 && !roleName.equals("courier", ignoreCase = true)) {
+                return Result.failure(
+                    SecurityException("Akses ditolak: akun Anda bukan kurir (role_id: $roleId).")
+                )
+            }
+
+            if (!accountStatus.equals("active", ignoreCase = true)) {
+                return Result.failure(
+                    SecurityException("Akun dinonaktifkan (status: $accountStatus). Hubungi Admin.")
+                )
+            }
+
+            currentUserUuid = dbUserId
+
+            val profileArr = executeGetJsonArray(
+                "$SUPABASE_URL/rest/v1/courier_profiles?select=*&user_id=eq.$dbUserId"
+            )
+
+            var profileId = 0
+            if (profileArr != null && profileArr.length() > 0) {
+                val pRow = profileArr.getJSONObject(0)
+                profileId = pRow.optInt("id", 0)
+                currentCourierProfileId = profileId
+                syncCourierProfileRowToRepo(pRow, userName, email, userPhone)
+            } else {
+                val base = repository.courier.value
+                repository.syncCourierFromStream(
+                    base.copy(id = dbUserId, name = userName, email = email, phone = userPhone)
+                )
+            }
+
+            Result.success(
+                CourierAuthSession(
+                    userId = dbUserId,
+                    courierId = if (profileId > 0) profileId.toString() else dbUserId,
+                    email = email,
+                    role = "courier",
+                    accountStatus = accountStatus,
+                    accessToken = accessToken
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun fetchAndSyncCourierProfileByUuid(userUuid: String) {
+        val usersArr = executeGetJsonArray("$SUPABASE_URL/rest/v1/users?select=*&id=eq.$userUuid") ?: return
+        if (usersArr.length() == 0) return
+        val uRow = usersArr.getJSONObject(0)
+        val userName = uRow.optString("name", "Kurir Kube")
+        val userEmail = uRow.optString("email", "")
+        val userPhone = uRow.optString("phone", "")
+
+        val profileArr = executeGetJsonArray(
+            "$SUPABASE_URL/rest/v1/courier_profiles?select=*&user_id=eq.$userUuid"
+        ) ?: return
+        if (profileArr.length() > 0) {
+            val pRow = profileArr.getJSONObject(0)
+            currentCourierProfileId = pRow.optInt("id", currentCourierProfileId)
+            syncCourierProfileRowToRepo(pRow, userName, userEmail, userPhone)
+        }
+    }
+
+    private fun syncCourierProfileRowToRepo(
+        row: JSONObject,
+        fallbackName: String,
+        fallbackEmail: String,
+        fallbackPhone: String
+    ) {
+        val base = repository.courier.value
+        val profileIdStr = row.optInt("id", 0).let { if (it > 0) it.toString() else base.id }
+        val fullName = row.optString("full_name").takeIf { it.isNotBlank() && it != "null" } ?: fallbackName
+        val phone = row.optString("phone_whatsapp").takeIf { it.isNotBlank() && it != "null" } ?: fallbackPhone
+        val address = row.optString("address").takeIf { it.isNotBlank() && it != "null" }
+            ?: row.optString("work_area").takeIf { it.isNotBlank() && it != "null" }
+            ?: "Area Operasional Kube"
+        val plate = row.optString("license_plate").takeIf { it.isNotBlank() && it != "null" }
+            ?: row.optString("vehicle_plate").takeIf { it.isNotBlank() && it != "null" }
+            ?: "-"
+        val capacity = row.optString("vehicle_capacity").takeIf { it.isNotBlank() && it != "null" }
+            ?: "Standar Armada"
+        val statusRaw = row.optString("status", "available")
+        val statusLabel = if (statusRaw.equals("available", ignoreCase = true)) "Siap Bertugas" else statusRaw
+
+        val primaryBank = _bankAccounts.value.firstOrNull { it.isPrimary } ?: _bankAccounts.value.firstOrNull()
+
+        repository.syncCourierFromStream(
+            base.copy(
+                id = profileIdStr,
+                name = fullName,
+                email = fallbackEmail.ifBlank { base.email },
+                phone = phone,
+                address = address,
+                isActiveDuty = row.optBoolean("is_on_duty", true),
+                vehicleType = row.optString("vehicle_type", "-"),
+                vehiclePlateNumber = plate,
+                vehicleCapacity = capacity,
+                vehicleStatus = statusLabel,
+                bankName = primaryBank?.bankName ?: base.bankName,
+                bankAccountNumber = primaryBank?.accountNumber ?: base.bankAccountNumber,
+                bankAccountHolder = primaryBank?.accountHolder ?: fullName
+            )
+        )
+    }
+
+    // =========================================================================
+    // 2. TOGGLE ON-DUTY & UPDATE PROFIL
+    // =========================================================================
+
+    suspend fun toggleOnDuty(
+        courierId: String = repository.courier.value.id,
+        isOnDuty: Boolean
+    ): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            repository.updateCourierDuty(isOnDuty)
+            val profileId = courierId.toIntOrNull() ?: currentCourierProfileId
+            if (profileId > 0) {
+                val payload = JSONObject().apply {
+                    put("is_on_duty", isOnDuty)
+                    put("status", if (isOnDuty) "available" else "offline")
+                }.toString()
+                executePatch("$SUPABASE_URL/rest/v1/courier_profiles?id=eq.$profileId", payload)
+            }
+            Result.success(isOnDuty)
+        } catch (e: Exception) {
+            Log.e(TAG, "toggleOnDuty error", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateCourierProfile(
+        courierId: String = repository.courier.value.id,
+        phone: String,
+        address: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            repository.updateCourierProfile(phone, address)
+            val profileId = courierId.toIntOrNull() ?: currentCourierProfileId
+            if (profileId > 0) {
+                val profilePayload = JSONObject().apply {
+                    put("phone_whatsapp", phone.trim())
+                    put("address", address.trim())
+                }.toString()
+                executePatch("$SUPABASE_URL/rest/v1/courier_profiles?id=eq.$profileId", profilePayload)
+            }
+            if (currentUserUuid.isNotBlank()) {
+                val userPayload = JSONObject().apply {
+                    put("phone", phone.trim())
+                }.toString()
+                executePatch("$SUPABASE_URL/rest/v1/users?id=eq.$currentUserUuid", userPayload)
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "updateCourierProfile error", e)
+            Result.failure(e)
+        }
+    }
+
+    // =========================================================================
+    // 3. DAFTAR TUGAS PENGIRIMAN (orders + order_items + products + payment_methods + consumer_profiles + deliveries)
+    // =========================================================================
+
+    suspend fun getMyDeliveries(
+        courierId: String = repository.courier.value.id
+    ): Result<List<DeliveryOrder>> = withContext(Dispatchers.IO) {
+        try {
+            if (currentUserUuid.isNotBlank()) {
+                fetchAndSyncOrdersAndDeliveries(currentUserUuid, currentCourierProfileId)
+            }
+            Result.success(repository.orders.value)
+        } catch (e: Exception) {
+            Log.e(TAG, "getMyDeliveries error", e)
+            Result.success(repository.orders.value)
+        }
+    }
+
+    private fun fetchAndSyncOrdersAndDeliveries(userUuid: String, profileId: Int) {
+        val ordersUrl = "$SUPABASE_URL/rest/v1/orders" +
+            "?select=*,payment_methods(id,name,code),order_items(id,quantity,price_per_unit,subtotal,products(id,name,courier_commission)),deliveries(*)" +
+            "&courier_id=eq.$userUuid" +
+            "&order=created_at.desc"
+
+        val ordersArr = executeGetJsonArray(ordersUrl) ?: return
+        if (ordersArr.length() == 0) {
+            repository.syncOrdersFromStream(emptyList())
+            return
+        }
+
+        // Kumpulkan consumer_id untuk mengambil nama dari `users` & alamat/nama kafe dari `consumer_profiles`
+        val consumerIds = mutableSetOf<String>()
+        for (i in 0 until ordersArr.length()) {
+            val cId = ordersArr.optJSONObject(i)?.optString("consumer_id").orEmpty()
+            if (cId.isNotBlank() && cId != "null") consumerIds.add(cId)
+        }
+
+        val consumerProfileMap = mutableMapOf<String, JSONObject>()
+        val consumerUserMap = mutableMapOf<String, JSONObject>()
+
+        if (consumerIds.isNotEmpty()) {
+            val inFilter = consumerIds.joinToString(",")
+            executeGetJsonArray("$SUPABASE_URL/rest/v1/consumer_profiles?select=*&user_id=in.($inFilter)")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val uId = obj.optString("user_id")
+                    if (uId.isNotBlank()) consumerProfileMap[uId] = obj
+                }
+            }
+            executeGetJsonArray("$SUPABASE_URL/rest/v1/users?select=id,name,phone&id=in.($inFilter)")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val uId = obj.optString("id")
+                    if (uId.isNotBlank()) consumerUserMap[uId] = obj
+                }
+            }
+        }
+
+        val mappedOrders = mutableListOf<DeliveryOrder>()
+
+        for (i in 0 until ordersArr.length()) {
+            val row = ordersArr.optJSONObject(i) ?: continue
+            val orderDbId = row.optInt("id", 0)
+            val orderCode = row.optString("order_code", "ORD-$orderDbId")
+            val consumerId = row.optString("consumer_id")
+
+            // 1. Resolusi Pelanggan & Alamat
+            val cProfile = consumerProfileMap[consumerId]
+            val cUser = consumerUserMap[consumerId]
+            val cafeName = cProfile?.optString("cafe_name").takeIf { !it.isNullOrBlank() && it != "null" }
+            val userFullName = cUser?.optString("name").takeIf { !it.isNullOrBlank() && it != "null" }
+            val customerName = when {
+                cafeName != null && userFullName != null -> "$cafeName ($userFullName)"
+                cafeName != null -> cafeName
+                userFullName != null -> userFullName
+                else -> "Pelanggan #$orderCode"
+            }
+
+            val rawOrderAddr = row.optString("delivery_address").trim()
+            val profileAddr = cProfile?.optString("address").takeIf { !it.isNullOrBlank() && it != "null" }.orEmpty()
+            val finalAddress = if (rawOrderAddr.isBlank() ||
+                rawOrderAddr.equals("null", ignoreCase = true) ||
+                rawOrderAddr.equals("Gagal memuat alamat", ignoreCase = true)
+            ) {
+                profileAddr.ifBlank { "Alamat menunggu konfirmasi pelanggan" }
+            } else {
+                rawOrderAddr
+            }
+
+            val customerPhone = cUser?.optString("phone").takeIf { !it.isNullOrBlank() && it != "null" }.orEmpty()
+
+            // 2. Resolusi Item Barang, Harga Satuan & Komisi Kurir
+            val itemsArr = row.optJSONArray("order_items")
+            val itemSummaries = mutableListOf<String>()
+            var totalCommission = 0L
+            var firstUnitPrice = 0L
+
+            if (itemsArr != null) {
+                for (j in 0 until itemsArr.length()) {
+                    val itemObj = itemsArr.optJSONObject(j) ?: continue
+                    val qty = itemObj.optInt("quantity", 1)
+                    val unitPrice = itemObj.optDouble("price_per_unit", 0.0).toLong()
+                    if (firstUnitPrice == 0L && unitPrice > 0L) firstUnitPrice = unitPrice
+
+                    val prodObj = itemObj.optJSONObject("products")
+                    val prodName = prodObj?.optString("name").orEmpty().ifBlank { "Paket Es Kube" }
+                    val unitComm = prodObj?.optDouble("courier_commission", 500.0)?.toLong() ?: 500L
+
+                    totalCommission += (qty * unitComm)
+                    itemSummaries.add("$qty x $prodName")
+                }
+            }
+            val itemDescription = itemSummaries.joinToString(", ").ifBlank { "Paket Es Kube" }
+
+            // 3. Resolusi Pembayaran & Deteksi COD
+            val pmObj = row.optJSONObject("payment_methods")
+            val pmCode = pmObj?.optString("code").orEmpty().ifBlank { "QRIS" }
+            val pmName = pmObj?.optString("name").orEmpty().ifBlank { "Non-Tunai" }
+            val totalAmount = row.optDouble("total_amount", 0.0).toLong()
+            val paymentStatusRaw = row.optString("payment_status", "unpaid")
+            val isPaid = paymentStatusRaw.equals("paid", ignoreCase = true)
+
+            val meta = OrderPaymentMeta(
+                orderDbId = orderDbId,
+                orderCode = orderCode,
+                paymentMethodCode = pmCode,
+                paymentMethodName = pmName,
+                totalAmount = totalAmount,
+                unitPrice = firstUnitPrice,
+                commissionAmount = totalCommission.coerceAtLeast(1000L),
+                isPaid = isPaid
+            )
+            orderMetaByCode[orderCode] = meta
+
+            val paymentStatusLabel = when {
+                meta.isCodOrder && !isPaid -> "COD - Tagih Rp ${"%,d".format(totalAmount).replace(',', '.')}"
+                meta.isCodOrder && isPaid -> "COD - Lunas Tunai"
+                isPaid -> "Lunas ($pmName)"
+                else -> "Belum dibayar ($pmName)"
+            }
+
+            // 4. Resolusi Status & Data Pengiriman dari tabel `deliveries` (jika sudah ada barisnya)
+            val deliveriesVal = row.opt("deliveries")
+            val deliveryObj: JSONObject? = when (deliveriesVal) {
+                is JSONArray -> if (deliveriesVal.length() > 0) deliveriesVal.optJSONObject(0) else null
+                is JSONObject -> deliveriesVal
+                else -> null
+            }
+
+            if (deliveryObj != null) {
+                val dId = deliveryObj.optInt("id", 0)
+                if (dId > 0) deliveryIdByOrderDbId[orderDbId] = dId
+                val dbComm = deliveryObj.optDouble("commission_amount", 0.0).toLong()
+                if (dbComm > 0L) {
+                    orderMetaByCode[orderCode] = meta.copy(commissionAmount = dbComm)
+                }
+            }
+
+            val rawStatus = deliveryObj?.optString("status").takeIf { !it.isNullOrBlank() && it != "null" }
+                ?: row.optString("order_status", "pending")
+            val mappedStatus = mapRemoteDeliveryStatus(rawStatus)
+
+            val priorityRaw = deliveryObj?.optString("priority").takeIf { !it.isNullOrBlank() && it != "null" }
+                ?: row.optString("delivery_type", "Normal")
+            val priorityLabel = if (priorityRaw.equals("instant", ignoreCase = true) ||
+                priorityRaw.equals("urgent", ignoreCase = true)
+            ) "Prioritas" else "Normal"
+
+            val recipient = deliveryObj?.optString("recipient_name").takeIf { !it.isNullOrBlank() && it != "null" }.orEmpty()
+            val podUrl = deliveryObj?.optString("pod_photo_url").takeIf { !it.isNullOrBlank() && it != "null" }
+            val dNotes = deliveryObj?.optString("delivery_notes").takeIf { !it.isNullOrBlank() && it != "null" }
+                ?: row.optString("notes").takeIf { !it.isNullOrBlank() && it != "null" }
+
+            val pod = if (recipient.isNotBlank() || !podUrl.isNullOrBlank()) {
+                ProofOfDelivery(
+                    recipientName = recipient.ifBlank { customerName },
+                    photoUri = podUrl,
+                    confirmedQuantity = itemsArr?.optJSONObject(0)?.optInt("quantity", 1) ?: 1,
+                    notes = dNotes
+                )
+            } else null
+
+            mappedOrders.add(
+                DeliveryOrder(
+                    id = orderCode,
+                    customerName = customerName,
+                    address = finalAddress,
+                    subDistrict = if (meta.isCodOrder) "Metode: COD (Tunai)" else "Metode: $pmName",
+                    phoneNumber = customerPhone,
+                    itemDescription = itemDescription,
+                    paymentStatus = paymentStatusLabel,
+                    priority = priorityLabel,
+                    estimatedTimeMinutes = deliveryObj?.optInt("estimated_minutes", 15)?.takeIf { it > 0 } ?: 15,
+                    distanceKm = deliveryObj?.optDouble("distance_km", 2.5)?.takeIf { !it.isNaN() && it > 0.0 } ?: 2.5,
+                    status = mappedStatus,
+                    assignedTime = formatTimestampShort(row.optString("created_at")),
+                    inTransitTime = if (mappedStatus == DeliveryStatus.IN_TRANSIT || mappedStatus == DeliveryStatus.DELIVERED)
+                        formatTimestampShort(row.optString("updated_at")) else null,
+                    deliveredTime = deliveryObj?.optString("delivered_at").takeIf { !it.isNullOrBlank() && it != "null" }
+                        ?.let { formatTimestampShort(it) },
+                    notes = dNotes,
+                    proofOfDelivery = pod
+                )
+            )
+        }
+
+        repository.syncOrdersFromStream(mappedOrders)
+    }
+
+    private fun mapRemoteDeliveryStatus(statusRaw: String): DeliveryStatus {
+        return when (statusRaw.trim().lowercase()) {
+            "assigned", "new", "pending", "confirmed", "waiting" -> DeliveryStatus.NEW
+            "picked_up", "in_transit", "delivering", "shipping", "on_delivery" -> DeliveryStatus.IN_TRANSIT
+            "arrived", "at_location" -> DeliveryStatus.ARRIVED
+            "delivered", "completed", "success" -> DeliveryStatus.DELIVERED
+            "returned", "failed", "cancelled" -> DeliveryStatus.FAILED
+            else -> DeliveryStatus.NEW
+        }
+    }
+
+    // =========================================================================
+    // 4. UPDATE PROGRES PERJALANAN & UPLOAD BUKTI PENGIRIMAN (PoD + STORAGE + KOMISI)
+    // =========================================================================
+
+    suspend fun updateDeliveryProgress(
+        orderId: String,
+        newStatus: DeliveryStatus
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            repository.updateOrderStatus(orderId, newStatus)
+            val meta = orderMetaByCode[orderId] ?: return@withContext Result.success(Unit)
+
+            val orderStatusDb = when (newStatus) {
+                DeliveryStatus.NEW -> "pending"
+                DeliveryStatus.IN_TRANSIT, DeliveryStatus.ARRIVED -> "delivering"
+                DeliveryStatus.PENDING_VERIFICATION, DeliveryStatus.DELIVERED -> "completed"
+                DeliveryStatus.FAILED -> "cancelled"
+            }
+
+            val deliveryStatusDb = when (newStatus) {
+                DeliveryStatus.NEW -> "assigned"
+                DeliveryStatus.IN_TRANSIT -> "in_transit"
+                DeliveryStatus.ARRIVED -> "arrived"
+                DeliveryStatus.PENDING_VERIFICATION, DeliveryStatus.DELIVERED -> "delivered"
+                DeliveryStatus.FAILED -> "returned"
+            }
+
+            // 1. Update tabel `orders`
+            val orderPayload = JSONObject().apply {
+                put("order_status", orderStatusDb)
+                if (currentUserUuid.isNotBlank()) put("updated_by", currentUserUuid)
+            }.toString()
+            executePatch("$SUPABASE_URL/rest/v1/orders?id=eq.${meta.orderDbId}", orderPayload)
+
+            // 2. Upsert tabel `deliveries` berdasarkan `order_id`
+            val deliveryDbId = upsertDeliveryRow(
+                orderDbId = meta.orderDbId,
+                status = deliveryStatusDb,
+                commissionAmount = meta.commissionAmount
+            )
+
+            // 3. Catat log ke `delivery_logs`
+            if (deliveryDbId > 0) {
+                insertDeliveryLog(
+                    deliveryId = deliveryDbId,
+                    status = deliveryStatusDb,
+                    notes = "Status pengiriman diperbarui menjadi $deliveryStatusDb"
+                )
+            }
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "updateDeliveryProgress error", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun completeDeliveryWithPoD(
+        orderId: String,
+        recipientName: String,
+        photoUri: String?,
+        confirmedQuantity: Int,
+        notes: String?,
+        context: Context? = null,
+        isCodCollected: Boolean = true
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val meta = orderMetaByCode[orderId]
+            val orderDbId = meta?.orderDbId ?: 0
+            val commissionAmt = meta?.commissionAmount ?: 1000L
+
+            // 1. Upload foto bukti biner ke Supabase Storage bucket `pod-photos`
+            val uploadedPhotoUrl = if (!photoUri.isNullOrBlank()) {
+                uploadPhotoToSupabaseStorage(
+                    photoUriString = photoUri,
+                    fileName = "pod_${orderId}_${System.currentTimeMillis()}.jpg",
+                    context = context
+                ) ?: photoUri
+            } else {
+                ""
+            }
+
+            repository.submitProofOfDelivery(
+                orderId = orderId,
+                recipientName = recipientName,
+                photoUri = uploadedPhotoUrl.ifBlank { photoUri },
+                confirmedQuantity = confirmedQuantity,
+                notes = notes
+            )
+
+            if (orderDbId > 0) {
+                // 2. Update `orders` -> `order_status = 'completed'`, dan jika COD -> `payment_status = 'paid'`
+                val orderPayload = JSONObject().apply {
+                    put("order_status", "completed")
+                    if (meta?.isCodOrder == true && isCodCollected) {
+                        put("payment_status", "paid")
+                    }
+                    if (currentUserUuid.isNotBlank()) put("updated_by", currentUserUuid)
+                }.toString()
+                executePatch("$SUPABASE_URL/rest/v1/orders?id=eq.$orderDbId", orderPayload)
+
+                // 3. Upsert tabel `deliveries` dengan data PoD lengkap
+                val deliveryDbId = upsertDeliveryRow(
+                    orderDbId = orderDbId,
+                    status = "delivered",
+                    commissionAmount = commissionAmt,
+                    podPhotoUrl = uploadedPhotoUrl,
+                    recipientName = recipientName.trim(),
+                    deliveryNotes = notes?.trim()
+                )
+
+                // 4. Insert ke `delivery_logs` & `wallet_transactions` (komisi pending verifikasi admin)
+                if (deliveryDbId > 0) {
+                    insertDeliveryLog(
+                        deliveryId = deliveryDbId,
+                        status = "delivered",
+                        notes = "Diterima oleh ${recipientName.trim()} ($confirmedQuantity unit). ${notes.orEmpty()}".trim()
+                    )
+
+                    if (currentCourierProfileId > 0 && commissionAmt > 0) {
+                        val walletTxPayload = JSONObject().apply {
+                            put("courier_id", currentCourierProfileId)
+                            put("delivery_id", deliveryDbId)
+                            put("type", "commission")
+                            put("amount", commissionAmt)
+                            put("balance_status", "pending")
+                            put("description", "Komisi pengantaran #$orderId (Menunggu verifikasi PoD)")
+                        }.toString()
+                        executePost("$SUPABASE_URL/rest/v1/wallet_transactions", walletTxPayload)
+                    }
+                }
+            }
+
+            syncAllTablesOnce()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "completeDeliveryWithPoD error", e)
+            Result.failure(e)
+        }
+    }
+
+    private fun uploadPhotoToSupabaseStorage(
+        photoUriString: String,
+        fileName: String,
+        context: Context?
+    ): String? {
+        return runCatching {
+            val bytes: ByteArray? = when {
+                photoUriString.startsWith("http://") || photoUriString.startsWith("https://") -> return photoUriString
+                photoUriString.startsWith("content://") && context != null -> {
+                    context.contentResolver.openInputStream(Uri.parse(photoUriString))?.use { it.readBytes() }
+                }
+                photoUriString.startsWith("file://") -> {
+                    File(Uri.parse(photoUriString).path.orEmpty()).takeIf { it.exists() }?.readBytes()
+                }
+                else -> File(photoUriString).takeIf { it.exists() }?.readBytes()
+            }
+
+            if (bytes == null || bytes.isEmpty()) return null
+
+            val uploadReq = Request.Builder()
+                .url("$SUPABASE_URL/storage/v1/object/$POD_STORAGE_BUCKET/$fileName")
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "image/jpeg")
+                .addHeader("x-upsert", "true")
+                .post(bytes.toRequestBody("image/jpeg".toMediaType()))
+                .build()
+
+            okHttpClient.newCall(uploadReq).execute().use { res ->
+                if (res.isSuccessful) {
+                    "$SUPABASE_URL/storage/v1/object/public/$POD_STORAGE_BUCKET/$fileName"
+                } else {
+                    Log.w(TAG, "Storage upload failed (${res.code}): ${res.body?.string()}")
+                    null
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun upsertDeliveryRow(
+        orderDbId: Int,
+        status: String,
+        commissionAmount: Long,
+        podPhotoUrl: String? = null,
+        recipientName: String? = null,
+        deliveryNotes: String? = null
+    ): Int {
+        return runCatching {
+            val payload = JSONObject().apply {
+                put("order_id", orderDbId)
+                if (currentCourierProfileId > 0) put("courier_id", currentCourierProfileId)
+                put("status", status)
+                put("commission_amount", commissionAmount)
+                if (!podPhotoUrl.isNullOrBlank()) {
+                    put("pod_photo_url", podPhotoUrl)
+                    put("proof_photo_path", podPhotoUrl)
+                }
+                if (!recipientName.isNullOrBlank()) put("recipient_name", recipientName)
+                if (!deliveryNotes.isNullOrBlank()) put("delivery_notes", deliveryNotes)
+                if (status == "delivered") {
+                    put("pod_status", "pending")
+                    put("delivered_at", java.time.Instant.now().toString())
+                }
+            }.toString()
+
+            val req = Request.Builder()
+                .url("$SUPABASE_URL/rest/v1/deliveries?on_conflict=order_id")
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "resolution=merge-duplicates,return=representation")
+                .post(payload.toRequestBody(jsonMediaType))
+                .build()
+
+            okHttpClient.newCall(req).execute().use { res ->
+                val body = res.body?.string().orEmpty().trim()
+                if (res.isSuccessful && body.startsWith("[")) {
+                    val id = JSONArray(body).optJSONObject(0)?.optInt("id", 0) ?: 0
+                    if (id > 0) deliveryIdByOrderDbId[orderDbId] = id
+                    id
+                } else {
+                    deliveryIdByOrderDbId[orderDbId] ?: 0
+                }
+            }
+        }.getOrDefault(deliveryIdByOrderDbId[orderDbId] ?: 0)
+    }
+
+    private fun insertDeliveryLog(deliveryId: Int, status: String, notes: String) {
+        val payload = JSONObject().apply {
+            put("delivery_id", deliveryId)
+            if (currentUserUuid.isNotBlank()) put("actor_id", currentUserUuid)
+            put("actor_role", "courier")
+            put("status", status)
+            put("notes", notes)
+        }.toString()
+        executePost("$SUPABASE_URL/rest/v1/delivery_logs", payload)
+    }
+
+    // =========================================================================
+    // 5. DOMPET, MUTASI KOMISI, REKENING BANK & PENARIKAN DANA (withdrawals)
+    // =========================================================================
+
+    private fun fetchAndSyncBankAccounts(courierProfileId: Int) {
+        val arr = executeGetJsonArray(
+            "$SUPABASE_URL/rest/v1/courier_bank_accounts?select=*&courier_id=eq.$courierProfileId&order=is_primary.desc"
+        ) ?: return
+
+        val accounts = mutableListOf<CourierBankAccountRecord>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            accounts.add(
+                CourierBankAccountRecord(
+                    id = row.optInt("id", 0),
+                    courierId = row.optInt("courier_id", courierProfileId),
+                    bankName = row.optString("bank_name", "-"),
+                    accountNumber = row.optString("account_number", "-"),
+                    accountHolder = row.optString("account_holder", "-"),
+                    isPrimary = row.optBoolean("is_primary", false),
+                    verificationStatus = row.optString("verification_status", "pending")
+                )
+            )
+        }
+        _bankAccounts.value = accounts
+
+        val primary = accounts.firstOrNull { it.isPrimary } ?: accounts.firstOrNull()
+        if (primary != null) {
+            val base = repository.courier.value
+            repository.syncCourierFromStream(
+                base.copy(
+                    bankName = primary.bankName,
+                    bankAccountNumber = primary.accountNumber,
+                    bankAccountHolder = primary.accountHolder
+                )
+            )
+        }
+    }
+
+    private fun fetchAndSyncWalletAndTransactions(courierProfileId: Int) {
+        val txArr = executeGetJsonArray(
+            "$SUPABASE_URL/rest/v1/wallet_transactions?select=*&courier_id=eq.$courierProfileId&order=created_at.desc"
+        ) ?: return
+
+        var pendingBal = 0L
+        var availableBal = 0L
+        val historyList = mutableListOf<CommissionHistoryItem>()
+
+        for (i in 0 until txArr.length()) {
+            val row = txArr.optJSONObject(i) ?: continue
+            val id = row.optInt("id", 0).toString()
+            val type = row.optString("type", "commission").lowercase()
+            val amount = row.optDouble("amount", 0.0).toLong()
+            val status = row.optString("balance_status", "pending").lowercase()
+            val deliveryId = row.opt("delivery_id")?.toString()?.takeIf { it != "null" } ?: "-"
+            val desc = row.optString("description").takeIf { it.isNotBlank() && it != "null" }
+                ?: if (type == "tip") "Tip Pelanggan" else "Komisi Pengantaran"
+
+            if (status == "pending") {
+                pendingBal += amount
+            } else if (status == "available") {
+                if (type == "withdrawal") {
+                    availableBal -= amount
+                } else {
+                    availableBal += amount
+                }
+            }
+
+            if (type != "withdrawal") {
+                historyList.add(
+                    CommissionHistoryItem(
+                        id = id,
+                        orderId = deliveryId,
+                        title = desc,
+                        subtitle = if (status == "available") "Siap Cair" else "Menunggu Verifikasi PoD",
+                        amount = amount,
+                        isTip = type == "tip",
+                        timestamp = formatTimestampShort(row.optString("created_at"))
+                    )
+                )
+            }
+        }
+
+        repository.syncCommissionHistoryFromStream(historyList)
+
+        val currentWithdrawn = repository.walletBalance.value.withdrawnBalance
+        repository.syncWalletBalanceFromStream(
+            WalletBalance(
+                pendingBalance = pendingBal.coerceAtLeast(0L),
+                availableBalance = availableBal.coerceAtLeast(0L),
+                withdrawnBalance = currentWithdrawn
+            )
+        )
+    }
+
+    private fun fetchAndSyncWithdrawals(courierProfileId: Int) {
+        val wdArr = executeGetJsonArray(
+            "$SUPABASE_URL/rest/v1/withdrawals?select=*,courier_bank_accounts(bank_name,account_number,account_holder)&courier_id=eq.$courierProfileId&order=created_at.desc"
+        ) ?: return
+
+        var totalWithdrawnSuccess = 0L
+        val list = mutableListOf<WithdrawalHistoryItem>()
+
+        for (i in 0 until wdArr.length()) {
+            val row = wdArr.optJSONObject(i) ?: continue
+            val code = row.optString("withdrawal_code", "WD-${row.optInt("id")}")
+            val amount = row.optDouble("amount", 0.0).toLong()
+            val statusRaw = row.optString("status", "pending").lowercase()
+
+            val mappedStatus = when (statusRaw) {
+                "processing" -> WithdrawalStatus.PROCESSING
+                "success", "approved", "completed", "paid" -> {
+                    totalWithdrawnSuccess += amount
+                    WithdrawalStatus.SUCCESS
+                }
+                "rejected", "failed" -> WithdrawalStatus.REJECTED
+                else -> WithdrawalStatus.WAITING
+            }
+
+            val bankObj = row.optJSONObject("courier_bank_accounts")
+            val bankName = bankObj?.optString("bank_name").orEmpty().ifBlank { repository.courier.value.bankName }
+            val accNum = bankObj?.optString("account_number").orEmpty().ifBlank { repository.courier.value.bankAccountNumber }
+            val accHolder = bankObj?.optString("account_holder").orEmpty().ifBlank { repository.courier.value.bankAccountHolder }
+
+            list.add(
+                WithdrawalHistoryItem(
+                    id = code,
+                    bankName = bankName,
+                    accountNumberMasked = maskAccountNumber(accNum),
+                    recipientName = accHolder,
+                    amount = amount,
+                    date = formatTimestampShort(row.optString("created_at")),
+                    status = mappedStatus,
+                    rejectionReason = null
+                )
+            )
+        }
+
+        repository.syncWithdrawalsFromStream(list)
+        val curWallet = repository.walletBalance.value
+        repository.syncWalletBalanceFromStream(curWallet.copy(withdrawnBalance = totalWithdrawnSuccess))
+    }
+
+    suspend fun getWalletSummary(
+        courierId: String = repository.courier.value.id
+    ): Result<WalletBalance> = withContext(Dispatchers.IO) {
+        val profileId = courierId.toIntOrNull() ?: currentCourierProfileId
+        if (profileId > 0) {
+            fetchAndSyncWalletAndTransactions(profileId)
+            fetchAndSyncWithdrawals(profileId)
+        }
+        Result.success(repository.walletBalance.value)
+    }
+
+    suspend fun requestWithdrawal(
+        courierId: String = repository.courier.value.id,
+        amount: Long,
+        bankAccount: String = repository.courier.value.bankAccountNumber
+    ): Result<WithdrawalHistoryItem> = withContext(Dispatchers.IO) {
+        try {
+            val profileId = courierId.toIntOrNull() ?: currentCourierProfileId
+            if (profileId <= 0) {
+                return@withContext Result.failure(IllegalStateException("Profil kurir belum tersinkronisasi."))
+            }
+
+            if (_bankAccounts.value.isEmpty()) {
+                fetchAndSyncBankAccounts(profileId)
+            }
+            val primaryBank = _bankAccounts.value.firstOrNull { it.isPrimary }
+                ?: _bankAccounts.value.firstOrNull()
+                ?: return@withContext Result.failure(
+                    IllegalStateException("Rekening bank belum terdaftar. Hubungi Admin untuk mendaftarkan rekening.")
+                )
+
+            val wdCode = "WD-${System.currentTimeMillis().toString().takeLast(6)}"
+
+            val wdPayload = JSONObject().apply {
+                put("withdrawal_code", wdCode)
+                put("courier_id", profileId)
+                put("bank_account_id", primaryBank.id)
+                put("amount", amount)
+                put("status", "pending")
+            }.toString()
+            executePost("$SUPABASE_URL/rest/v1/withdrawals", wdPayload)
+
+            val txPayload = JSONObject().apply {
+                put("courier_id", profileId)
+                put("type", "withdrawal")
+                put("amount", amount)
+                put("balance_status", "available")
+                put("description", "Pengajuan tarik dana ($wdCode)")
+            }.toString()
+            executePost("$SUPABASE_URL/rest/v1/wallet_transactions", txPayload)
+
+            syncAllTablesOnce()
+
+            val created = repository.withdrawalHistory.value.firstOrNull { it.id == wdCode }
+                ?: WithdrawalHistoryItem(
+                    id = wdCode,
+                    bankName = primaryBank.bankName,
+                    accountNumberMasked = maskAccountNumber(primaryBank.accountNumber),
+                    recipientName = primaryBank.accountHolder,
+                    amount = amount,
+                    date = "Baru saja",
+                    status = WithdrawalStatus.WAITING
+                )
+            Result.success(created)
+        } catch (e: Exception) {
+            Log.e(TAG, "requestWithdrawal error", e)
+            Result.failure(e)
+        }
+    }
+
+    // =========================================================================
+    // 6. NOTIFIKASI & KONTAK BANTUAN ADMIN (notifications + support_contacts)
+    // =========================================================================
+
+    private fun fetchAndSyncNotifications(courierProfileId: Int) {
+        val arr = executeGetJsonArray(
+            "$SUPABASE_URL/rest/v1/notifications?select=*&courier_id=eq.$courierProfileId&order=created_at.desc"
+        ) ?: return
+
+        val list = mutableListOf<CourierNotificationRecord>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            list.add(
+                CourierNotificationRecord(
+                    id = row.optInt("id", i).toString(),
+                    title = row.optString("title", "Notifikasi Kube"),
+                    message = row.optString("message", ""),
+                    time = formatTimestampShort(row.optString("created_at")),
+                    category = row.optString("category", "order"),
+                    isUnread = !row.optBoolean("is_read", false)
+                )
+            )
+        }
+        _notifications.value = list
+    }
+
+    private fun fetchAndSyncSupportContacts() {
+        val arr = executeGetJsonArray("$SUPABASE_URL/rest/v1/support_contacts?select=*") ?: return
+        val list = mutableListOf<SupportContactRecord>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            list.add(
+                SupportContactRecord(
+                    id = row.optInt("id", 0),
+                    warehouseId = if (row.isNull("warehouse_id")) null else row.optInt("warehouse_id"),
+                    serviceType = row.optString("service_type", "Admin Operasional"),
+                    contactName = row.optString("contact_name", "Admin Kube"),
+                    phoneNumber = row.optString("phone_number", ""),
+                    serviceHours = row.optString("service_hours", "24 Jam")
+                )
+            )
+        }
+        _supportContacts.value = list
+    }
+
+    // =========================================================================
+    // 7. PUBLIC STREAMS & SUMMARY HELPERS
+    // =========================================================================
+
+    fun calculateTodaySummary(orders: List<DeliveryOrder> = repository.orders.value): DailyStatsState {
+        return DailyStatsProvider.getInstance(repository).computeStats(orders)
+    }
+
+    fun streamMyDeliveries(courierId: String = repository.courier.value.id): Flow<List<DeliveryOrder>> {
+        return repository.orders.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    fun streamNotifications(courierId: String = repository.courier.value.id): Flow<List<CourierNotificationRecord>> {
+        return notifications.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    fun streamWalletSummary(courierId: String = repository.courier.value.id): Flow<WalletBalance> {
+        return repository.walletBalance.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    fun streamWalletTransactions(courierId: String = repository.courier.value.id): Flow<List<CommissionHistoryItem>> {
+        return repository.commissionHistory.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    fun streamWithdrawals(courierId: String = repository.courier.value.id): Flow<List<WithdrawalHistoryItem>> {
+        return repository.withdrawalHistory.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    fun streamCourierProfile(courierId: String = repository.courier.value.id): Flow<Courier> {
+        return repository.courier.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    fun streamWarehouseInfo(warehouseId: String = "1"): Flow<WarehouseInfo> {
+        return warehouseInfo.onStart { ensureRealtimeSyncStarted() }
+    }
+
+    // =========================================================================
+    // 8. HTTP REST HELPERS
+    // =========================================================================
+
+    private fun executeGetJsonArray(url: String): JSONArray? {
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .get()
+                .build()
+            okHttpClient.newCall(request).execute().use { res ->
+                val body = res.body?.string().orEmpty().trim()
+                if (res.isSuccessful && body.startsWith("[")) JSONArray(body) else null
+            }
+        }.getOrNull()
+    }
+
+    private fun executePost(url: String, jsonPayload: String): Boolean {
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "application/json")
+                .post(jsonPayload.toRequestBody(jsonMediaType))
+                .build()
+            okHttpClient.newCall(request).execute().use { it.isSuccessful }
+        }.getOrDefault(false)
+    }
+
+    private fun executePatch(url: String, jsonPayload: String): Boolean {
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "application/json")
+                .patch(jsonPayload.toRequestBody(jsonMediaType))
+                .build()
+            okHttpClient.newCall(request).execute().use { it.isSuccessful }
+        }.getOrDefault(false)
+    }
+
+    private fun formatTimestampShort(isoString: String?): String {
+        if (isoString.isNullOrBlank() || isoString == "null") return "Hari ini"
+        return if (isoString.length >= 16) {
+            isoString.substring(0, 10) + " " + isoString.substring(11, 16)
+        } else {
+            isoString
+        }
+    }
+}

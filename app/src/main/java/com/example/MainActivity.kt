@@ -24,6 +24,7 @@ import androidx.compose.ui.zIndex
 import com.example.core.components.KubeBottomNav
 import com.example.core.components.KubeNavTab
 import com.example.core.model.DeliveryStatus
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.features.auth.AuthScreen
 import com.example.features.auth.OnboardingScreen
@@ -109,6 +110,7 @@ fun KubeCourierApp() {
                 MainWrapper(
                     repository = repository,
                     onSignOut = {
+                        CourierSupabaseService.instance.logoutCourier()
                         currentScreen = AppScreen.AUTH_LOGIN
                     }
                 )
@@ -128,7 +130,7 @@ fun MainWrapper(
     onSignOut: () -> Unit
 ) {
     var selectedNavTab by rememberSaveable { mutableStateOf(KubeNavTab.HOME) }
-    var selectedOrderId by rememberSaveable { mutableStateOf<String?>("ESB-00128") }
+    var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var activeDeliveryFilter by rememberSaveable { mutableStateOf<DeliveryStatus?>(null) }
 
     // Back button inside MainWrapper: returns to Home tab if not already on Home

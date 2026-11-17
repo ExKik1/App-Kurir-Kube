@@ -15,9 +15,9 @@ enum class WithdrawalStatus(val label: String) {
  */
 data class WithdrawalHistoryItem(
     val id: String,
-    val bankName: String = "BCA",
-    val accountNumberMasked: String = "**** **** 2831",
-    val recipientName: String = "MARYONO SUPARDI",
+    val bankName: String = "",
+    val accountNumberMasked: String = "",
+    val recipientName: String = "",
     val amount: Long,
     val date: String,
     val status: WithdrawalStatus,
@@ -44,9 +44,9 @@ data class CommissionHistoryItem(
  * - withdrawnBalance: Total balance already successfully withdrawn (blue)
  */
 data class WalletBalance(
-    val pendingBalance: Long = 145000L,
-    val availableBalance: Long = 850000L,
-    val withdrawnBalance: Long = 2450000L
+    val pendingBalance: Long = 0L,
+    val availableBalance: Long = 0L,
+    val withdrawnBalance: Long = 0L
 )
 
 /**

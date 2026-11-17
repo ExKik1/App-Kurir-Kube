@@ -72,8 +72,9 @@ fun DeliveryHistoryScreen(
     BackHandler { onBack() }
 
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialOrders = remember(repository) { repository.orders.value }
-    val allOrders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
+    val allOrders by supabaseService.streamMyDeliveries(activeCourierProfileId.orEmpty()).collectAsState(initial = initialOrders)
     // Filter HANYA pesanan berstatus Selesai atau Gagal
     val historyOrders = remember(allOrders) {
         allOrders.filter {

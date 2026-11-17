@@ -43,7 +43,7 @@ import com.example.ui.theme.KubeTextDark
 
 @Composable
 fun TopCourierBar(
-    name: String = "Maryono Supardi",
+    name: String = "Kurir Kube",
     statusSubtitle: String = "Selamat Bertugas",
     periodBadgeText: String? = "Hari Ini",
     isOnDuty: Boolean = true,
@@ -75,7 +75,7 @@ fun TopCourierBar(
             ) {
                 Image(
                     painter = painterResource(id = R.drawable.maryono_avatar),
-                    contentDescription = "Foto Kurir Maryono Supardi",
+                    contentDescription = "Foto Profil $name",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.size(52.dp)
                 )

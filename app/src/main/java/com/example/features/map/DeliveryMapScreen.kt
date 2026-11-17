@@ -32,9 +32,11 @@ import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -65,6 +67,7 @@ import com.example.core.model.DeliveryOrder
 import com.example.core.model.DeliveryStatus
 import com.example.core.network.CourierSupabaseService
 import com.example.core.network.DirectionsService
+import com.example.core.network.OrderPaymentMeta
 import com.example.core.repository.OrderRepository
 import com.example.features.delivery.ProofOfDeliveryBottomSheet
 import com.example.ui.theme.KubeBlueBright
@@ -83,11 +86,13 @@ fun DeliveryMapScreen(
     onNavigateToProfile: () -> Unit = {}
 ) {
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialOrders = remember(repository) { repository.orders.value }
     val initialCourier = remember(repository) { repository.courier.value }
+    val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
 
-    val orders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
-    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val orders by supabaseService.streamMyDeliveries(courierProfileId).collectAsState(initial = initialOrders)
+    val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
     val routeEta by directionsService.routeEta.collectAsState()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -97,23 +102,17 @@ fun DeliveryMapScreen(
     val currentOrder = orders.find { it.id == orderId }
         ?: orders.firstOrNull { it.status == DeliveryStatus.IN_TRANSIT }
         ?: orders.firstOrNull()
-        ?: DeliveryOrder(
-            id = "ESB-00128",
-            customerName = "Toko Es Segar",
-            address = "Jl. Melati No. 12",
-            itemDescription = "10 balok es"
-        )
 
     val scrollState = rememberScrollState()
 
-    fun openExternalNavigation() {
-        val addressUri = Uri.parse("geo:0,0?q=${Uri.encode(currentOrder.address + ", Purwokerto")}")
+    fun openExternalNavigation(address: String) {
+        val addressUri = Uri.parse("geo:0,0?q=${Uri.encode("$address, Purwokerto")}")
         val mapIntent = Intent(Intent.ACTION_VIEW, addressUri)
         mapIntent.setPackage("com.google.android.apps.maps")
         try {
             context.startActivity(mapIntent)
         } catch (e: Exception) {
-            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com/?q=${Uri.encode(currentOrder.address)}"))
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://maps.google.com/?q=${Uri.encode(address)}"))
             context.startActivity(webIntent)
         }
     }
@@ -155,7 +154,7 @@ fun DeliveryMapScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = currentOrder.status.displayName,
+                                text = currentOrder?.status?.displayName ?: "Menunggu Tugas",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF0F3657)
@@ -183,6 +182,52 @@ fun DeliveryMapScreen(
             }
 
             Spacer(modifier = Modifier.height(14.dp))
+
+            if (currentOrder == null) {
+                LiquidGlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = 4.dp
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.LocalShipping,
+                            contentDescription = null,
+                            tint = KubeBlueBright,
+                            modifier = Modifier.size(40.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Belum Ada Pengiriman Aktif",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KubeTextDark
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Daftar pengiriman dari Supabase saat ini masih kosong. Silakan cek tab Delivery untuk pesanan terbaru.",
+                            fontSize = 13.sp,
+                            color = KubeTextMuted
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = onNavigateBack,
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = KubeBlueBright,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text("Lihat Daftar Delivery", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            } else {
 
             // Order & Customer Summary Glass Card
             LiquidGlassCard(
@@ -292,7 +337,7 @@ fun DeliveryMapScreen(
 
                         // "Buka Navigasi" Blue Pill Button
                         Button(
-                            onClick = { openExternalNavigation() },
+                            onClick = { openExternalNavigation(currentOrder.address) },
                             shape = RoundedCornerShape(20.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF0288D1),
@@ -318,7 +363,7 @@ fun DeliveryMapScreen(
             InteractiveRouteMapView(
                 routeEta = routeEta,
                 modifier = Modifier.padding(horizontal = 20.dp),
-                onMapClick = { openExternalNavigation() }
+                onMapClick = { openExternalNavigation(currentOrder.address) }
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -415,6 +460,20 @@ fun DeliveryMapScreen(
                     title = "Prioritas",
                     value = currentOrder.priority,
                     modifier = Modifier.weight(0.9f)
+                )
+            }
+
+            val orderMeta = remember(currentOrder.id, orders) {
+                supabaseService.getOrderMeta(currentOrder.id)
+            }
+            val isCodOrder = orderMeta?.isCodOrder ?: currentOrder.isCod
+
+            if (isCodOrder) {
+                Spacer(modifier = Modifier.height(14.dp))
+                CodPaymentCollectionCard(
+                    order = currentOrder,
+                    orderMeta = orderMeta,
+                    modifier = Modifier.padding(horizontal = 20.dp)
                 )
             }
 
@@ -592,23 +651,30 @@ fun DeliveryMapScreen(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+            }
         }
 
         // Proof of Delivery Bottom Sheet
-        if (showProofOfDeliverySheet) {
+        if (showProofOfDeliverySheet && currentOrder != null) {
+            val activeOrderMeta = remember(currentOrder.id, orders) {
+                supabaseService.getOrderMeta(currentOrder.id)
+            }
             ProofOfDeliveryBottomSheet(
                 order = currentOrder,
+                orderMeta = activeOrderMeta,
                 onDismissRequest = { showProofOfDeliverySheet = false },
-                onSubmitProof = { recipientName, photoUri, confirmedQty, notes ->
+                onSubmitProof = { recipientName, photoUri, confirmedQty, notes, isCodCashConfirmed ->
                     showProofOfDeliverySheet = false
                     coroutineScope.launch {
                         try {
-                            val res = CourierSupabaseService.instance.completeDeliveryWithPoD(
+                            val res = supabaseService.completeDeliveryWithPoD(
                                 orderId = currentOrder.id,
                                 recipientName = recipientName,
                                 photoUri = photoUri,
                                 confirmedQuantity = confirmedQty,
-                                notes = notes
+                                notes = notes,
+                                context = context,
+                                isCodCollected = isCodCashConfirmed
                             )
                             res.fold(
                                 onSuccess = {
@@ -748,4 +814,172 @@ private fun TimelineStep(
             )
         }
     }
+}
+
+@Composable
+private fun CodPaymentCollectionCard(
+    order: DeliveryOrder,
+    orderMeta: OrderPaymentMeta? = null,
+    modifier: Modifier = Modifier
+) {
+    val isPaid = orderMeta?.isPaid == true ||
+        order.paymentStatus.equals("Lunas", ignoreCase = true) ||
+        order.paymentStatus.equals("paid", ignoreCase = true) ||
+        order.paymentStatus.contains("Lunas", ignoreCase = true)
+    val unitPriceToShow = orderMeta?.unitPrice?.takeIf { it > 0L } ?: order.effectiveUnitPrice
+    val totalAmountToShow = orderMeta?.totalAmount?.takeIf { it > 0L } ?: order.effectiveTotalAmount
+    val accentColor = if (isPaid) Color(0xFF2E7D32) else Color(0xFFD97706)
+    val surfaceBg = if (isPaid) Color(0xFFE8F5E9).copy(alpha = 0.92f) else Color(0xFFFFF8E1).copy(alpha = 0.94f)
+    val borderColor = if (isPaid) Color(0xFF81C784) else Color(0xFFFBBF24)
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("cod_payment_collection_card"),
+        shape = RoundedCornerShape(22.dp),
+        color = surfaceBg,
+        border = BorderStroke(1.2.dp, borderColor),
+        shadowElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(accentColor.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Payments,
+                            contentDescription = "Pembayaran COD",
+                            tint = accentColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "BAYAR DI TEMPAT (COD)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = accentColor,
+                            letterSpacing = 0.4.sp
+                        )
+                        Text(
+                            text = "Rincian Tagihan Tunai",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KubeTextDark
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = accentColor.copy(alpha = 0.14f),
+                    border = BorderStroke(0.8.dp, accentColor.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = if (isPaid) "Lunas" else "Tagih Tunai",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = accentColor,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Rincian Pesanan",
+                    fontSize = 12.sp,
+                    color = KubeTextMuted
+                )
+                Text(
+                    text = "${order.itemDescription} (${order.defaultQuantity} unit)",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KubeTextDark
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Harga Satuan Es",
+                    fontSize = 12.sp,
+                    color = KubeTextMuted
+                )
+                Text(
+                    text = "${formatCodCardRupiah(unitPriceToShow)} / unit",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KubeTextDark
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = borderColor.copy(alpha = 0.45f))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Total yang Harus Ditagih",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = KubeTextDark
+                )
+                Text(
+                    text = formatCodCardRupiah(totalAmountToShow),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = accentColor,
+                    modifier = Modifier.testTag("cod_total_amount_text")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = if (isPaid) {
+                    "Uang tunai COD telah dikonfirmasi diterima dan berstatus Lunas."
+                } else {
+                    "Pastikan Anda menerima uang tunai sesuai nominal di atas sebelum mengirim PoD."
+                },
+                fontSize = 11.sp,
+                color = if (isPaid) Color(0xFF1B5E20) else Color(0xFF92400E),
+                lineHeight = 15.sp
+            )
+        }
+    }
+}
+
+private fun formatCodCardRupiah(amount: Long): String {
+    val formatted = String.format(java.util.Locale("in", "ID"), "%,d", amount).replace(',', '.')
+    return "Rp $formatted"
 }

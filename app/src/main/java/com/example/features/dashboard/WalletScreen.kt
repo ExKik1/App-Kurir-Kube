@@ -90,15 +90,19 @@ fun WalletScreen(
     onNavigateToProfile: () -> Unit = {}
 ) {
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialCourier = remember(repository) { repository.courier.value }
     val initialWallet = remember(repository) { repository.walletBalance.value }
     val initialCommissions = remember(repository) { repository.commissionHistory.value }
     val initialWithdrawals = remember(repository) { repository.withdrawalHistory.value }
+    val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
 
-    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
-    val walletBalance by supabaseService.streamWalletSummary().collectAsState(initial = initialWallet)
-    val commissionList by supabaseService.streamWalletTransactions().collectAsState(initial = initialCommissions)
-    val withdrawalList by supabaseService.streamWithdrawals().collectAsState(initial = initialWithdrawals)
+    val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
+    val walletBalance by supabaseService.streamWalletSummary(courierProfileId).collectAsState(initial = initialWallet)
+    val commissionList by supabaseService.streamWalletTransactions(courierProfileId).collectAsState(initial = initialCommissions)
+    val withdrawalList by supabaseService.streamWithdrawals(courierProfileId).collectAsState(initial = initialWithdrawals)
+    val deliveries by supabaseService.streamMyDeliveries(courierProfileId).collectAsState(initial = emptyList())
+    val notifications by supabaseService.streamNotifications(courierProfileId).collectAsState(initial = emptyList())
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Riwayat Komisi, 1: Riwayat Pencairan
     var showEditAccountDialog by remember { mutableStateOf(false) }
@@ -299,8 +303,14 @@ fun WalletScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    val bankLabel = courier.bankName.ifBlank { "Bank" }
+                                    val accountMasked = if (courier.bankAccountNumber.isBlank()) {
+                                        "Belum diatur"
+                                    } else {
+                                        maskAccountNumber(courier.bankAccountNumber)
+                                    }
                                     Text(
-                                        text = "BCA • ${maskAccountNumber(courier.bankAccountNumber)}",
+                                        text = "$bankLabel • $accountMasked",
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = KubeTextDark
@@ -308,7 +318,7 @@ fun WalletScreen(
                                 }
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "a.n. ${courier.bankAccountHolder}",
+                                    text = "a.n. ${courier.bankAccountHolder.ifBlank { courier.name.ifBlank { "-" } }}",
                                     fontSize = 12.sp,
                                     color = KubeTextMuted
                                 )
@@ -435,8 +445,22 @@ fun WalletScreen(
                             .testTag("list_riwayat_komisi"),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        commissionList.forEach { commission ->
-                            CommissionHistoryCard(item = commission)
+                        if (commissionList.isEmpty()) {
+                            LiquidGlassCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp),
+                                elevation = 2.dp
+                            ) {
+                                Text(
+                                    text = "Belum ada riwayat komisi untuk ${deliveries.size} pengiriman & ${notifications.size} notifikasi.",
+                                    fontSize = 13.sp,
+                                    color = KubeTextMuted
+                                )
+                            }
+                        } else {
+                            commissionList.forEach { commission ->
+                                CommissionHistoryCard(item = commission)
+                            }
                         }
                     }
                 } else {
@@ -451,8 +475,22 @@ fun WalletScreen(
                             .testTag("list_riwayat_pencairan"),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        withdrawalList.forEach { withdrawal ->
-                            WithdrawalHistoryCard(item = withdrawal)
+                        if (withdrawalList.isEmpty()) {
+                            LiquidGlassCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp),
+                                elevation = 2.dp
+                            ) {
+                                Text(
+                                    text = "Belum ada pengajuan pencairan dana.",
+                                    fontSize = 13.sp,
+                                    color = KubeTextMuted
+                                )
+                            }
+                        } else {
+                            withdrawalList.forEach { withdrawal ->
+                                WithdrawalHistoryCard(item = withdrawal)
+                            }
                         }
                     }
                 }

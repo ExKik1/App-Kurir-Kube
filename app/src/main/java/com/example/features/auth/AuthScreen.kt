@@ -88,9 +88,9 @@ fun AuthScreen(
     onAuthSuccess: () -> Unit
 ) {
     var isSignUp by remember { mutableStateOf(initialIsSignUp) }
-    var email by remember { mutableStateOf("maryonosupardi@kube.com") }
-    var password by remember { mutableStateOf("password123") }
-    var confirmPassword by remember { mutableStateOf("password123") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var confirmPasswordVisible by remember { mutableStateOf(false) }
     var rememberMe by remember { mutableStateOf(true) }
@@ -119,12 +119,14 @@ fun AuthScreen(
                         email = email,
                         password = password
                     )
-                    isLoading = false
                     result.fold(
                         onSuccess = {
+                            CourierSupabaseService.instance.syncAllTablesOnce()
+                            isLoading = false
                             onAuthSuccess()
                         },
                         onFailure = { error ->
+                            isLoading = false
                             snackbarHostState.showSnackbar(
                                 error.message ?: "Gagal masuk ke akun kurir. Periksa kredensial Anda."
                             )
@@ -555,7 +557,13 @@ fun AuthScreen(
                 ) {
                     // Google Button
                     OutlinedButton(
-                        onClick = onAuthSuccess,
+                        onClick = {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "Gunakan Email & Kata Sandi akun kurir yang terdaftar di Supabase."
+                                )
+                            }
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(52.dp)
@@ -588,7 +596,13 @@ fun AuthScreen(
 
                     // Apple Button
                     OutlinedButton(
-                        onClick = onAuthSuccess,
+                        onClick = {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    "Gunakan Email & Kata Sandi akun kurir yang terdaftar di Supabase."
+                                )
+                            }
+                        },
                         modifier = Modifier
                             .weight(1f)
                             .height(52.dp)

@@ -86,8 +86,10 @@ fun EditProfileScreen(
     BackHandler { onBack() }
 
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialCourier = remember(repository) { repository.courier.value }
-    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
+    val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }

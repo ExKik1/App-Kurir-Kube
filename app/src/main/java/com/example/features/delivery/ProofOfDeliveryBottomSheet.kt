@@ -32,12 +32,15 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.core.model.DeliveryOrder
+import com.example.core.network.CourierSupabaseService
+import com.example.core.network.OrderPaymentMeta
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
@@ -85,13 +90,15 @@ import com.example.ui.theme.KubeTextMuted
 @Composable
 fun ProofOfDeliveryBottomSheet(
     order: DeliveryOrder,
+    orderMeta: OrderPaymentMeta? = remember(order.id) { CourierSupabaseService.instance.getOrderMeta(order.id) },
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     onDismissRequest: () -> Unit,
     onSubmitProof: (
         recipientName: String,
         photoUri: String?,
         confirmedQuantity: Int,
-        notes: String?
+        notes: String?,
+        isCodPaymentConfirmed: Boolean
     ) -> Unit
 ) {
     var recipientName by remember { mutableStateOf("") }
@@ -99,6 +106,10 @@ fun ProofOfDeliveryBottomSheet(
     var confirmedQuantity by remember { mutableIntStateOf(order.defaultQuantity) }
     var notes by remember { mutableStateOf("") }
     var hasAttemptedSubmit by remember { mutableStateOf(false) }
+    val isCodOrder = orderMeta?.isCodOrder ?: order.isCod
+    val codTotalAmount = orderMeta?.totalAmount?.takeIf { it > 0L } ?: order.effectiveTotalAmount
+    val codUnitPrice = orderMeta?.unitPrice?.takeIf { it > 0L } ?: order.effectiveUnitPrice
+    var isCodCashConfirmed by remember(order.id) { mutableStateOf(false) }
 
     // Android Zero-permission Photo Picker
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -671,6 +682,102 @@ fun ProofOfDeliveryBottomSheet(
 
             Spacer(modifier = Modifier.height(14.dp))
 
+            // Khusus pesanan COD: Wajib konfirmasi penerimaan uang tunai sebelum tombol Submit aktif
+            if (isCodOrder) {
+                val formattedCodTotal = formatPodRupiah(codTotalAmount)
+                val formattedUnitPrice = formatPodRupiah(codUnitPrice)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable { isCodCashConfirmed = !isCodCashConfirmed }
+                        .testTag("cod_cash_confirmation_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isCodCashConfirmed) Color(0xFFE8F5E9) else Color(0xFFFFF8E1),
+                    border = BorderStroke(
+                        width = 1.2.dp,
+                        color = if (isCodCashConfirmed) Color(0xFF4CAF50) else Color(0xFFF59E0B)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(
+                                        if (isCodCashConfirmed) Color(0xFF2E7D32).copy(alpha = 0.14f)
+                                        else Color(0xFFF59E0B).copy(alpha = 0.18f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Payments,
+                                    contentDescription = null,
+                                    tint = if (isCodCashConfirmed) Color(0xFF2E7D32) else Color(0xFFD97706),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Tagihan Tunai COD",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = KubeTextDark
+                                )
+                                Text(
+                                    text = "${order.itemDescription} (${formattedUnitPrice}/unit) · Total $formattedCodTotal",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (isCodCashConfirmed) Color(0xFF1B5E20) else Color(0xFFB45309)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.85f))
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .testTag("cod_cash_confirmation_row"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isCodCashConfirmed,
+                                onCheckedChange = { isCodCashConfirmed = it },
+                                modifier = Modifier.testTag("cod_cash_confirmation_checkbox"),
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = Color(0xFF2E7D32),
+                                    uncheckedColor = Color(0xFFD97706),
+                                    checkmarkColor = Color.White
+                                )
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Saya konfirmasi telah menerima uang tunai sebesar $formattedCodTotal dari pelanggan",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = KubeTextDark,
+                                lineHeight = 16.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             // Info Notice: Direct completion logic
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -699,21 +806,35 @@ fun ProofOfDeliveryBottomSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            if (isCodOrder && !isCodCashConfirmed) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "Centang konfirmasi penerimaan uang tunai COD di atas untuk mengaktifkan tombol Submit PoD.",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFFB45309)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            val isSubmitEnabled = !isCodOrder || isCodCashConfirmed
 
             // 5. TOMBOL SUBMIT: 'Selesaikan & Kirim PoD'
             Button(
                 onClick = {
                     hasAttemptedSubmit = true
-                    if (recipientName.trim().isNotBlank()) {
+                    if (recipientName.trim().isNotBlank() && isSubmitEnabled) {
                         onSubmitProof(
                             recipientName.trim(),
                             selectedPhotoUri?.toString(),
                             confirmedQuantity,
-                            notes.trim().ifBlank { null }
+                            notes.trim().ifBlank { null },
+                            isCodCashConfirmed
                         )
                     }
                 },
+                enabled = isSubmitEnabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)
@@ -721,7 +842,9 @@ fun ProofOfDeliveryBottomSheet(
                 shape = RoundedCornerShape(26.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF2E7D32), // Green completion color
-                    contentColor = Color.White
+                    contentColor = Color.White,
+                    disabledContainerColor = Color(0xFF94A3B8).copy(alpha = 0.55f),
+                    disabledContentColor = Color.White.copy(alpha = 0.85f)
                 )
             ) {
                 Icon(
@@ -738,4 +861,9 @@ fun ProofOfDeliveryBottomSheet(
             }
         }
     }
+}
+
+private fun formatPodRupiah(amount: Long): String {
+    val formatted = String.format(java.util.Locale("in", "ID"), "%,d", amount).replace(',', '.')
+    return "Rp $formatted"
 }

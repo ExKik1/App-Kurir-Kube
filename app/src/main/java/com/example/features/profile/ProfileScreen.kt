@@ -147,8 +147,10 @@ private fun ProfileMainContent(
     onSignOut: () -> Unit
 ) {
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialCourier = remember(repository) { repository.courier.value }
-    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
+    val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
     val warehouse by supabaseService.streamWarehouseInfo().collectAsState(initial = com.example.core.network.WarehouseInfo())
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
@@ -331,7 +333,7 @@ private fun ProfileMainContent(
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.maryono_avatar),
-                        contentDescription = "Maryono Supardi Avatar",
+                        contentDescription = "Avatar ${courier.name}",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )

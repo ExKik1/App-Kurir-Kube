@@ -16,11 +16,11 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 data class DailyStatsState(
     val periodLabel: String = "Hari Ini",
-    val dateText: String = "Hari Ini • 28 Okt 2026",
-    val totalOrders: Int = 20,
-    val completedOrders: Int = 12,
-    val inDeliveryOrders: Int = 5,
-    val newTasksOrders: Int = 3,
+    val dateText: String = "Hari Ini",
+    val totalOrders: Int = 0,
+    val completedOrders: Int = 0,
+    val inDeliveryOrders: Int = 0,
+    val newTasksOrders: Int = 0,
     val failedReturnOrders: Int = 0
 ) {
     /**

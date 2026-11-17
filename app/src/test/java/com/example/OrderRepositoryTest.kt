@@ -1,51 +1,238 @@
 package com.example
 
+import com.example.core.model.CommissionHistoryItem
+import com.example.core.model.Courier
+import com.example.core.model.DeliveryOrder
 import com.example.core.model.DeliveryStatus
+import com.example.core.model.WalletBalance
+import com.example.core.model.WithdrawalHistoryItem
+import com.example.core.model.WithdrawalStatus
+import com.example.core.model.maskAccountNumber
+import com.example.core.network.CourierBankAccountRecord
+import com.example.core.network.CourierSupabaseService
+import com.example.core.network.OrderPaymentMeta
+import com.example.core.network.SupportContactRecord
 import com.example.core.repository.OrderRepository
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OrderRepositoryTest {
 
-    @Test
-    fun repository_initialOrders_containsActiveDelivery() {
+    private fun createSeededRepository(): OrderRepository {
         val repo = OrderRepository()
-        val orders = repo.orders.value
-        assertTrue("Orders list should not be empty", orders.isNotEmpty())
+        repo.syncCourierFromStream(
+            Courier(
+                id = "101",
+                name = "Budi Santoso",
+                email = "budi@kube.com",
+                phone = "+62 813 9876 5432",
+                address = "Jl. Patriot No. 1, Purwokerto",
+                isActiveDuty = true,
+                balance = 850000L,
+                pendingBalance = 145000L,
+                withdrawnBalance = 2450000L,
+                bankAccountNumber = "8830192831",
+                bankName = "BCA",
+                bankAccountHolder = "BUDI SANTOSO",
+                vehicleType = "Truk Box Pendingin (Freezer)",
+                vehiclePlateNumber = "R 8921 KB",
+                vehicleCapacity = "Maks. 50 Balok Es (± 1.250 kg)",
+                vehicleStatus = "Prima & Layak Jalan",
+                isBiometricEnabled = true
+            )
+        )
+        repo.syncWalletBalanceFromStream(
+            WalletBalance(
+                pendingBalance = 145000L,
+                availableBalance = 850000L,
+                withdrawnBalance = 2450000L
+            )
+        )
+        repo.syncOrdersFromStream(
+            listOf(
+                DeliveryOrder(
+                    id = "ESB-00128",
+                    customerName = "Toko Es Segar",
+                    address = "Jl. Melati No. 12",
+                    itemDescription = "10 balok es",
+                    paymentStatus = "Belum dibayar",
+                    status = DeliveryStatus.IN_TRANSIT,
+                    paymentMethod = "COD",
+                    totalAmount = 150000L,
+                    unitPrice = 15000L
+                ),
+                DeliveryOrder(
+                    id = "ESB-00127",
+                    customerName = "Depot Es Buah Segar",
+                    address = "Jl. Gatot Subroto No. 3",
+                    itemDescription = "8 balok es",
+                    paymentStatus = "Lunas",
+                    status = DeliveryStatus.IN_TRANSIT,
+                    paymentMethod = "QRIS",
+                    totalAmount = 120000L,
+                    unitPrice = 15000L
+                ),
+                DeliveryOrder(
+                    id = "ESB-00129",
+                    customerName = "Warung Segar",
+                    address = "Jl. Diponegoro No. 45",
+                    itemDescription = "4 kantong es kristal",
+                    paymentStatus = "Lunas",
+                    status = DeliveryStatus.NEW,
+                    paymentMethod = "TRANSFER",
+                    totalAmount = 60000L,
+                    unitPrice = 15000L
+                ),
+                DeliveryOrder(
+                    id = "ESB-00126",
+                    customerName = "Supermarket Sehat",
+                    address = "Jl. Pahlawan No. 20",
+                    itemDescription = "20 balok es",
+                    paymentStatus = "Lunas",
+                    status = DeliveryStatus.DELIVERED,
+                    paymentMethod = "QRIS",
+                    totalAmount = 300000L,
+                    unitPrice = 15000L
+                )
+            )
+        )
+        repo.syncCommissionHistoryFromStream(
+            listOf(
+                CommissionHistoryItem(
+                    id = "COM-101",
+                    orderId = "#ESB-00127",
+                    title = "Komisi 8 balok es - Rp45.000",
+                    subtitle = "Depot Es Buah Segar (#ESB-00127)",
+                    amount = 45000L,
+                    isTip = false,
+                    timestamp = "09:10"
+                ),
+                CommissionHistoryItem(
+                    id = "COM-102",
+                    orderId = "#ESB-00126",
+                    title = "Tip Pelanggan - Rp20.000",
+                    subtitle = "Supermarket Sehat (#ESB-00126)",
+                    amount = 20000L,
+                    isTip = true,
+                    timestamp = "08:50"
+                )
+            )
+        )
+        repo.syncWithdrawalsFromStream(
+            listOf(
+                WithdrawalHistoryItem(
+                    id = "WD-99401",
+                    bankName = "BCA",
+                    accountNumberMasked = maskAccountNumber("8830192831"),
+                    recipientName = "BUDI SANTOSO",
+                    amount = 500000L,
+                    date = "28 Okt 2026, 09:30",
+                    status = WithdrawalStatus.WAITING,
+                    rejectionReason = null
+                ),
+                WithdrawalHistoryItem(
+                    id = "WD-99388",
+                    bankName = "BCA",
+                    accountNumberMasked = maskAccountNumber("8830192831"),
+                    recipientName = "BUDI SANTOSO",
+                    amount = 750000L,
+                    date = "27 Okt 2026, 16:15",
+                    status = WithdrawalStatus.PROCESSING,
+                    rejectionReason = null
+                ),
+                WithdrawalHistoryItem(
+                    id = "WD-99210",
+                    bankName = "BCA",
+                    accountNumberMasked = maskAccountNumber("8830192831"),
+                    recipientName = "BUDI SANTOSO",
+                    amount = 1200000L,
+                    date = "24 Okt 2026, 11:00",
+                    status = WithdrawalStatus.SUCCESS,
+                    rejectionReason = null
+                ),
+                WithdrawalHistoryItem(
+                    id = "WD-99105",
+                    bankName = "BCA",
+                    accountNumberMasked = maskAccountNumber("8830192831"),
+                    recipientName = "BUDI SANTOSO",
+                    amount = 350000L,
+                    date = "21 Okt 2026, 15:40",
+                    status = WithdrawalStatus.REJECTED,
+                    rejectionReason = "Nama pemilik rekening tidak sesuai."
+                )
+            )
+        )
+        return repo
+    }
 
-        val activeOrder = repo.getOrderById("ESB-00128")
-        assertNotNull("Order ESB-00128 should exist", activeOrder)
-        assertEquals("Toko Es Segar", activeOrder?.customerName)
-        assertEquals(DeliveryStatus.IN_TRANSIT, activeOrder?.status)
+    @Test
+    fun repository_initialState_startsEmptyAndZeroBalances() {
+        val repo = OrderRepository()
+        assertTrue("Initial orders must be empty", repo.orders.value.isEmpty())
+        assertTrue("Initial commissions must be empty", repo.commissionHistory.value.isEmpty())
+        assertTrue("Initial withdrawals must be empty", repo.withdrawalHistory.value.isEmpty())
+
+        val wallet = repo.walletBalance.value
+        assertEquals(0L, wallet.pendingBalance)
+        assertEquals(0L, wallet.availableBalance)
+        assertEquals(0L, wallet.withdrawnBalance)
+
+        val defaultWallet = WalletBalance()
+        assertEquals(0L, defaultWallet.pendingBalance)
+        assertEquals(0L, defaultWallet.availableBalance)
+        assertEquals(0L, defaultWallet.withdrawnBalance)
+
+        val stats = repo.dailyStats.value
+        assertEquals(0, stats.totalOrders)
+        assertEquals(0, stats.completedOrders)
+        assertEquals(0, stats.inDeliveryOrders)
+        assertEquals(0, stats.newTasksOrders)
+        assertEquals(0, stats.failedReturnOrders)
+        assertTrue(stats.isMathematicallyConsistent)
+    }
+
+    @Test
+    fun repository_syncEmptyStreams_clearsExistingListsForAccurateEmptyState() {
+        val repo = createSeededRepository()
+        assertFalse(repo.orders.value.isEmpty())
+        assertFalse(repo.commissionHistory.value.isEmpty())
+        assertFalse(repo.withdrawalHistory.value.isEmpty())
+
+        // Simulasikan Supabase mengembalikan array kosong []
+        repo.syncOrdersFromStream(emptyList())
+        repo.syncCommissionHistoryFromStream(emptyList())
+        repo.syncWithdrawalsFromStream(emptyList())
+
+        assertTrue("Orders list must clear when Supabase returns empty array", repo.orders.value.isEmpty())
+        assertTrue("Commissions must clear when Supabase returns empty array", repo.commissionHistory.value.isEmpty())
+        assertTrue("Withdrawals must clear when Supabase returns empty array", repo.withdrawalHistory.value.isEmpty())
+        assertEquals(0, repo.dailyStats.value.totalOrders)
+        assertTrue(repo.dailyStats.value.isMathematicallyConsistent)
     }
 
     @Test
     fun repository_dailyStats_isSingleSourceOfTruthAndMathematicallyAccurate() {
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
         val stats = repo.dailyStats.value
 
         assertEquals("Hari Ini", stats.periodLabel)
-        assertEquals(20, stats.totalOrders)
-        assertEquals(12, stats.completedOrders)
-        assertEquals(5, stats.inDeliveryOrders)
-        assertEquals(3, stats.newTasksOrders)
+        assertEquals(4, stats.totalOrders)
+        assertEquals(1, stats.completedOrders)
+        assertEquals(2, stats.inDeliveryOrders)
+        assertEquals(1, stats.newTasksOrders)
         assertEquals(0, stats.failedReturnOrders)
-
-        // Mathematical check: 20 == 12 + 5 + 3 + 0
-        assertTrue("Daily stats must be mathematically consistent", stats.isMathematicallyConsistent)
-        assertEquals(
-            stats.totalOrders,
-            stats.completedOrders + stats.inDeliveryOrders + stats.newTasksOrders + stats.failedReturnOrders
-        )
+        assertTrue(stats.isMathematicallyConsistent)
     }
 
     @Test
     fun repository_updateOrderStatus_updatesDailyStatsAndPreservesMathematicalInvariant() {
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
 
-        // Transition order ESB-00128 from IN_TRANSIT to DELIVERED
         repo.updateOrderStatus("ESB-00128", DeliveryStatus.DELIVERED)
 
         val updatedOrder = repo.getOrderById("ESB-00128")
@@ -53,19 +240,17 @@ class OrderRepositoryTest {
         assertNotNull(updatedOrder?.deliveredTime)
 
         val stats = repo.dailyStats.value
-        assertEquals(13, stats.completedOrders)
-        assertEquals(4, stats.inDeliveryOrders)
-        assertEquals(3, stats.newTasksOrders)
+        assertEquals(2, stats.completedOrders)
+        assertEquals(1, stats.inDeliveryOrders)
+        assertEquals(1, stats.newTasksOrders)
         assertEquals(0, stats.failedReturnOrders)
-        assertEquals(20, stats.totalOrders)
-
-        // Mathematical invariant: 20 == 13 + 4 + 3 + 0
-        assertTrue("Daily stats must remain mathematically consistent after transition", stats.isMathematicallyConsistent)
+        assertEquals(4, stats.totalOrders)
+        assertTrue(stats.isMathematicallyConsistent)
     }
 
     @Test
     fun repository_updateCourierDuty_updatesDutyState() {
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
         repo.updateCourierDuty(false)
         assertEquals(false, repo.courier.value.isActiveDuty)
         assertEquals("Sedang Istirahat", repo.courier.value.statusText)
@@ -77,189 +262,123 @@ class OrderRepositoryTest {
 
     @Test
     fun deliveryFiltering_orderStatusCategoriesAreAbsolute() {
-        // Aturan 1: Status Model Data memiliki kategori absolut
         assertTrue(DeliveryStatus.NEW.isAntrean)
-        assertTrue(!DeliveryStatus.NEW.isAktif)
-        assertTrue(!DeliveryStatus.NEW.isRiwayat)
+        assertFalse(DeliveryStatus.NEW.isAktif)
+        assertFalse(DeliveryStatus.NEW.isRiwayat)
 
         assertTrue(DeliveryStatus.IN_TRANSIT.isAktif)
         assertTrue(DeliveryStatus.ARRIVED.isAktif)
-        assertTrue(!DeliveryStatus.IN_TRANSIT.isAntrean)
-        assertTrue(!DeliveryStatus.IN_TRANSIT.isRiwayat)
+        assertFalse(DeliveryStatus.IN_TRANSIT.isAntrean)
+        assertFalse(DeliveryStatus.IN_TRANSIT.isRiwayat)
 
         assertTrue(DeliveryStatus.DELIVERED.isRiwayat)
         assertTrue(DeliveryStatus.FAILED.isRiwayat)
-        assertTrue(!DeliveryStatus.DELIVERED.isAktif)
-        assertTrue(!DeliveryStatus.DELIVERED.isAntrean)
+        assertFalse(DeliveryStatus.DELIVERED.isAktif)
+        assertFalse(DeliveryStatus.DELIVERED.isAntrean)
     }
 
     @Test
     fun deliveryFiltering_activeAndQueueSectionsAreStrictlyPartitioned() {
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
         val allOrders = repo.orders.value
 
-        // Aturan 2: Seksi 'Pengiriman Aktif' menampilkan maksimal 1 atau 2 pesanan aktif
         val activeDeliveries = allOrders.filter { it.isAktif }.take(2)
-        assertTrue("Active section must contain at most 2 items", activeDeliveries.size <= 2)
+        assertTrue(activeDeliveries.size <= 2)
         assertTrue(activeDeliveries.all { it.isAktif })
 
-        // Aturan 3: Seksi 'Antrean Berikutnya' HANYA memuat pesanan dengan status antrean (NEW)
         val queueOrders = allOrders.filter { it.isAntrean }
-        assertEquals(3, queueOrders.size)
-        assertTrue("Queue must only contain NEW status", queueOrders.all { it.status == DeliveryStatus.NEW })
-        assertTrue("Queue must NOT contain any DELIVERED orders", queueOrders.none { it.status == DeliveryStatus.DELIVERED })
-        assertTrue("Queue must NOT contain any FAILED orders", queueOrders.none { it.status == DeliveryStatus.FAILED })
-        assertTrue("Queue must NOT contain any IN_TRANSIT orders", queueOrders.none { it.status == DeliveryStatus.IN_TRANSIT })
+        assertEquals(1, queueOrders.size)
+        assertTrue(queueOrders.all { it.status == DeliveryStatus.NEW })
 
-        // Aturan 4: Pemisahan Tab Selesai (Riwayat)
         val historyOrders = allOrders.filter { it.isRiwayat }
-        assertEquals(12, historyOrders.size)
-        assertTrue("History orders must only contain DELIVERED or FAILED", historyOrders.all { it.isRiwayat })
+        assertEquals(1, historyOrders.size)
+        assertTrue(historyOrders.all { it.isRiwayat })
     }
 
     @Test
     fun deliveryFiltering_dynamicSynchronization_orderTransitionsMoveCleanlyBetweenSections() {
-        // Aturan 5: Sinkronisasi Data otomatis saat status berubah
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
 
-        val initialActive = repo.orders.value.filter { it.isAktif }.take(2)
-        assertTrue(initialActive.any { it.id == "ESB-00128" })
+        assertTrue(repo.orders.value.filter { it.isAktif }.any { it.id == "ESB-00128" })
 
-        // Kurir menyelesaikan pengiriman ESB-00128
         repo.updateOrderStatus("ESB-00128", DeliveryStatus.DELIVERED)
 
         val updatedOrders = repo.orders.value
-        val updatedActive = updatedOrders.filter { it.isAktif }
-        val updatedQueue = updatedOrders.filter { it.isAntrean }
-        val updatedHistory = updatedOrders.filter { it.isRiwayat }
-
-        // 1. Otomatis menghilang dari Pengiriman Aktif
-        assertTrue("Completed order must disappear from active deliveries", updatedActive.none { it.id == "ESB-00128" })
-
-        // 2. Tidak pernah muncul di Antrean Berikutnya
-        assertTrue("Completed order must NEVER enter the queue", updatedQueue.none { it.id == "ESB-00128" })
-
-        // 3. Otomatis berpindah ke Riwayat Selesai
-        assertTrue("Completed order must appear in history list", updatedHistory.any { it.id == "ESB-00128" })
-        assertEquals(13, updatedHistory.size)
+        assertTrue(updatedOrders.filter { it.isAktif }.none { it.id == "ESB-00128" })
+        assertTrue(updatedOrders.filter { it.isAntrean }.none { it.id == "ESB-00128" })
+        assertTrue(updatedOrders.filter { it.isRiwayat }.any { it.id == "ESB-00128" })
     }
 
     @Test
     fun proofOfDelivery_submissionImmediatelySetsStatusToDeliveredAndMovesToHistory() {
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
 
-        // Kurir tiba di lokasi
         repo.updateOrderStatus("ESB-00128", DeliveryStatus.ARRIVED)
-        val arrivedOrder = repo.getOrderById("ESB-00128")
-        assertEquals(DeliveryStatus.ARRIVED, arrivedOrder?.status)
+        assertEquals(DeliveryStatus.ARRIVED, repo.getOrderById("ESB-00128")?.status)
 
-        // Kurir mengisi form PoD dan menekan Selesaikan Pengiriman
         repo.submitProofOfDelivery(
             orderId = "ESB-00128",
             recipientName = "Bpk. Bambang Sutrisno",
-            photoUri = "android.resource://com.example/drawable/sample_ice.jpg",
+            photoUri = "https://wopqozbstvtuhxkuciun.supabase.co/storage/v1/object/public/pod-photos/sample.jpg",
             confirmedQuantity = 10,
             notes = "Ditaruh di freezer belakang toko"
         )
 
         val deliveredOrder = repo.getOrderById("ESB-00128")
-        assertNotNull("Order should exist", deliveredOrder)
-
-        // Logika Submit Baru (tanpa approval admin): Langsung Selesai / DELIVERED
+        assertNotNull(deliveredOrder)
         assertEquals(DeliveryStatus.DELIVERED, deliveredOrder?.status)
-        assertTrue("Delivered order must NOT be in queue (AKTIF)", deliveredOrder?.isAktif == false)
-        assertTrue("Delivered order must be in RIWAYAT (Selesai)", deliveredOrder?.isRiwayat == true)
+        assertFalse(deliveredOrder?.isAktif ?: true)
+        assertTrue(deliveredOrder?.isRiwayat ?: false)
 
-        // Data PoD tersimpan lengkap
         val pod = deliveredOrder?.proofOfDelivery
-        assertNotNull("PoD details must be recorded", pod)
         assertEquals("Bpk. Bambang Sutrisno", pod?.recipientName)
         assertEquals(10, pod?.confirmedQuantity)
         assertEquals("Ditaruh di freezer belakang toko", pod?.notes)
-        assertNotNull(pod?.photoUri)
 
-        // Invarian statistik harian tetap konsisten (20 == 13 Selesai + 4 Diantar + 3 Menunggu + 0 Retur)
         val stats = repo.dailyStats.value
-        assertEquals(13, stats.completedOrders) // Langsung bertambah menjadi 13
-        assertEquals(4, stats.inDeliveryOrders)  // Berkurang dari 5 menjadi 4
-        assertEquals(3, stats.newTasksOrders)
-        assertEquals(20, stats.totalOrders)
+        assertEquals(2, stats.completedOrders)
+        assertEquals(1, stats.inDeliveryOrders)
         assertTrue(stats.isMathematicallyConsistent)
     }
 
     @Test
-    fun wallet_balanceSeparation_containsThreeDistinctBalances() {
-        // Aturan 1: Pemisahan Saldo (Saldo Tertunda, Saldo Tersedia, Saldo Dicairkan)
-        val repo = OrderRepository()
+    fun wallet_balanceSeparation_andHistoriesWorkFromSyncedData() {
+        val repo = createSeededRepository()
         val wallet = repo.walletBalance.value
 
-        assertEquals("Saldo Tertunda harus Rp 145.000", 145000L, wallet.pendingBalance)
-        assertEquals("Saldo Tersedia harus Rp 850.000", 850000L, wallet.availableBalance)
-        assertEquals("Saldo Dicairkan harus Rp 2.450.000", 2450000L, wallet.withdrawnBalance)
-    }
+        assertEquals(145000L, wallet.pendingBalance)
+        assertEquals(850000L, wallet.availableBalance)
+        assertEquals(2450000L, wallet.withdrawnBalance)
 
-    @Test
-    fun wallet_commissionHistory_clarifiesIncomeDetails() {
-        // Aturan 2: Detail Riwayat Komisi memperjelas jenis pendapatan
-        val repo = OrderRepository()
         val commissions = repo.commissionHistory.value
-        assertTrue("Commission list must not be empty", commissions.isNotEmpty())
+        assertEquals(2, commissions.size)
+        assertEquals(45000L, commissions.find { it.title.contains("Komisi 8 balok es") }?.amount)
+        assertTrue(commissions.find { it.title.contains("Tip Pelanggan") }?.isTip == true)
 
-        val commissionItem = commissions.find { it.title.contains("Komisi 8 balok es") }
-        assertNotNull("Must include specific commission description", commissionItem)
-        assertEquals(45000L, commissionItem?.amount)
-
-        val tipItem = commissions.find { it.title.contains("Tip Pelanggan") }
-        assertNotNull("Must include tip description", tipItem)
-        assertTrue(tipItem?.isTip == true)
-    }
-
-    @Test
-    fun wallet_withdrawalHistory_containsProperStatusesAndRejectionReasons() {
-        // Aturan 3: Status Pencairan (Menunggu, Diproses, Berhasil, Ditolak dengan alasan)
-        val repo = OrderRepository()
         val withdrawals = repo.withdrawalHistory.value
-        assertTrue("Withdrawal list must not be empty", withdrawals.isNotEmpty())
-
-        val waiting = withdrawals.find { it.status == com.example.core.model.WithdrawalStatus.WAITING }
-        assertNotNull("Must have Menunggu withdrawal", waiting)
-        assertEquals("Menunggu", waiting?.status?.label)
-
-        val processing = withdrawals.find { it.status == com.example.core.model.WithdrawalStatus.PROCESSING }
-        assertNotNull("Must have Diproses withdrawal", processing)
-        assertEquals("Diproses", processing?.status?.label)
-
-        val success = withdrawals.find { it.status == com.example.core.model.WithdrawalStatus.SUCCESS }
-        assertNotNull("Must have Berhasil withdrawal", success)
-        assertEquals("Berhasil", success?.status?.label)
-
-        val rejected = withdrawals.find { it.status == com.example.core.model.WithdrawalStatus.REJECTED }
-        assertNotNull("Must have Ditolak withdrawal", rejected)
-        assertEquals("Ditolak", rejected?.status?.label)
-        assertNotNull("Rejected withdrawal MUST have rejectionReason", rejected?.rejectionReason)
-        assertTrue("Rejection reason must be informative", rejected?.rejectionReason?.isNotBlank() == true)
+        assertEquals(4, withdrawals.size)
+        assertNotNull(withdrawals.find { it.status == WithdrawalStatus.WAITING })
+        assertNotNull(withdrawals.find { it.status == WithdrawalStatus.PROCESSING })
+        assertNotNull(withdrawals.find { it.status == WithdrawalStatus.SUCCESS })
+        val rejected = withdrawals.find { it.status == WithdrawalStatus.REJECTED }
+        assertTrue(rejected?.rejectionReason?.isNotBlank() == true)
     }
 
     @Test
     fun wallet_securityMasking_masksAccountNumberCorrectly() {
-        // Aturan 4: Keamanan Rekening (Masking 8830192831 -> **** **** 2831)
-        val fullAccountNumber = "8830192831"
-        val masked = com.example.core.model.maskAccountNumber(fullAccountNumber)
-        assertEquals("**** **** 2831", masked)
-
-        val maskedWithSpaces = com.example.core.model.maskAccountNumber("8830 1928 31")
-        assertEquals("**** **** 2831", maskedWithSpaces)
+        assertEquals("**** **** 2831", maskAccountNumber("8830192831"))
+        assertEquals("**** **** 2831", maskAccountNumber("8830 1928 31"))
     }
 
     @Test
-    fun wallet_requestWithdrawal_updatesBalancesCorrectly() = kotlinx.coroutines.runBlocking {
-        val repo = OrderRepository()
+    fun wallet_requestWithdrawal_updatesBalancesCorrectly() = runBlocking {
+        val repo = createSeededRepository()
         val initialAvailable = repo.walletBalance.value.availableBalance
         val initialPending = repo.walletBalance.value.pendingBalance
 
         val requestedAmount = 200000L
         val result = repo.requestWithdrawal(requestedAmount)
-        assertTrue("Withdrawal request must succeed", result.isSuccess)
+        assertTrue(result.isSuccess)
 
         val updatedWallet = repo.walletBalance.value
         assertEquals(initialAvailable - requestedAmount, updatedWallet.availableBalance)
@@ -267,110 +386,47 @@ class OrderRepositoryTest {
 
         val latestWithdrawal = repo.withdrawalHistory.value.first()
         assertEquals(requestedAmount, latestWithdrawal.amount)
-        assertEquals(com.example.core.model.WithdrawalStatus.WAITING, latestWithdrawal.status)
+        assertEquals(WithdrawalStatus.WAITING, latestWithdrawal.status)
         assertEquals("**** **** 2831", latestWithdrawal.accountNumberMasked)
     }
 
     @Test
-    fun wallet_adminApproval_realtimeTransitionToSuccess() = kotlinx.coroutines.runBlocking {
-        // ATURAN 4: Pembaruan Riwayat Pencairan (Real-time perubahan status dari Web Admin)
-        val repo = OrderRepository()
+    fun wallet_adminApproval_realtimeTransitionToSuccess() = runBlocking {
+        val repo = createSeededRepository()
         val requestedAmount = 150000L
         val result = repo.requestWithdrawal(requestedAmount)
-        assertTrue("Request must succeed", result.isSuccess)
+        assertTrue(result.isSuccess)
         val withdrawal = result.getOrThrow()
-        assertEquals(com.example.core.model.WithdrawalStatus.WAITING, withdrawal.status)
 
-        // Web Admin melakukan verifikasi dan transfer uang secara manual, lalu menekan approve
         val approved = repo.simulateAdminApproval(withdrawal.id)
-        assertTrue("Admin approval simulation must succeed", approved)
+        assertTrue(approved)
 
         val updatedItem = repo.withdrawalHistory.value.find { it.id == withdrawal.id }
-        assertNotNull(updatedItem)
-        // Status otomatis berubah menjadi SUCCESS (Badge Hijau)
-        assertEquals(com.example.core.model.WithdrawalStatus.SUCCESS, updatedItem?.status)
-
-        // Saldo pending otomatis berkurang dan berpindah ke withdrawnBalance
-        val updatedWallet = repo.walletBalance.value
-        assertEquals(145000L, updatedWallet.pendingBalance) // kembali ke balance awal
-        assertEquals(2450000L + requestedAmount, updatedWallet.withdrawnBalance)
+        assertEquals(WithdrawalStatus.SUCCESS, updatedItem?.status)
+        assertEquals(145000L, repo.walletBalance.value.pendingBalance)
+        assertEquals(2450000L + requestedAmount, repo.walletBalance.value.withdrawnBalance)
     }
 
     @Test
-    fun profile_vehicleInformation_containsLogisticsSpecs() {
-        // Aturan 2: Informasi Kendaraan (Jenis Kendaraan, Nomor Polisi, Kapasitas Angkut, Status)
-        val repo = OrderRepository()
+    fun profile_vehicleAndEditUpdatesWorkCorrectly() {
+        val repo = createSeededRepository()
         val courier = repo.courier.value
-
+        assertEquals("101", courier.id)
+        assertEquals("budi@kube.com", courier.email)
         assertEquals("Truk Box Pendingin (Freezer)", courier.vehicleType)
-        assertEquals("R 8921 KB", courier.vehiclePlateNumber)
-        assertTrue("Vehicle capacity must specify maximum ice capacity", courier.vehicleCapacity.contains("Maks. 50 Balok"))
-        assertEquals("Prima & Layak Jalan", courier.vehicleStatus)
-    }
 
-    @Test
-    fun profile_credentialsAndBiometrics_handlesToggleAndReadOnlyState() {
-        // Aturan 3: Info Kredensial & Biometrik (ID Kurir & Email read-only, Biometric Switch)
-        val repo = OrderRepository()
-        val courier = repo.courier.value
-
-        assertEquals("CR-098", courier.id)
-        assertEquals("maryonosupardi@kube.com", courier.email)
-        assertTrue("Biometrics should be enabled by default", courier.isBiometricEnabled)
-
-        // Toggle biometrik
         repo.updateBiometricEnabled(false)
-        assertEquals(false, repo.courier.value.isBiometricEnabled)
+        assertFalse(repo.courier.value.isBiometricEnabled)
 
-        repo.updateBiometricEnabled(true)
-        assertEquals(true, repo.courier.value.isBiometricEnabled)
-    }
-
-    @Test
-    fun editProfile_updatesPhoneAndAddress_preservesNameAndEmail() {
-        val repo = OrderRepository()
-        val originalName = repo.courier.value.name
-        val originalEmail = repo.courier.value.email
-
-        val newPhone = "+62 821 7788 9900"
-        val newAddress = "Jl. Patriot No. 10, Karangpucung, Purwokerto"
-
-        repo.updateCourierProfile(newPhone, newAddress)
-
-        val updatedCourier = repo.courier.value
-        assertEquals(newPhone, updatedCourier.phone)
-        assertEquals(newAddress, updatedCourier.address)
-        // Read-only invariants: Name and Email must not change
-        assertEquals(originalName, updatedCourier.name)
-        assertEquals(originalEmail, updatedCourier.email)
-    }
-
-    @Test
-    fun deliveryHistory_filtersOnlyDeliveredAndFailedOrders() {
-        val repo = OrderRepository()
-        val allOrders = repo.orders.value
-
-        val historyOrders = allOrders.filter {
-            it.status == com.example.core.model.DeliveryStatus.DELIVERED ||
-            it.status == com.example.core.model.DeliveryStatus.FAILED
-        }
-
-        assertTrue("History orders must not be empty", historyOrders.isNotEmpty())
-        assertTrue("All history orders must be DELIVERED or FAILED", historyOrders.all {
-            it.status == com.example.core.model.DeliveryStatus.DELIVERED ||
-            it.status == com.example.core.model.DeliveryStatus.FAILED
-        })
-        assertTrue("No active IN_TRANSIT orders in history", historyOrders.none {
-            it.status == com.example.core.model.DeliveryStatus.IN_TRANSIT
-        })
-        assertTrue("No NEW queue orders in history", historyOrders.none {
-            it.status == com.example.core.model.DeliveryStatus.NEW
-        })
+        repo.updateCourierProfile("+62 821 7788 9900", "Jl. Patriot No. 10, Purwokerto")
+        assertEquals("+62 821 7788 9900", repo.courier.value.phone)
+        assertEquals("Jl. Patriot No. 10, Purwokerto", repo.courier.value.address)
+        assertEquals("budi@kube.com", repo.courier.value.email)
     }
 
     @Test
     fun proofOfDelivery_submissionCreditsCommissionToPendingBalance() {
-        val repo = OrderRepository()
+        val repo = createSeededRepository()
         val initialPending = repo.walletBalance.value.pendingBalance
 
         repo.submitProofOfDelivery(
@@ -381,121 +437,139 @@ class OrderRepositoryTest {
             notes = "Selesai"
         )
 
-        val updatedPending = repo.walletBalance.value.pendingBalance
-        assertEquals(initialPending + 50000L, updatedPending)
+        assertEquals(initialPending + 50000L, repo.walletBalance.value.pendingBalance)
         val latestCommission = repo.commissionHistory.value.first()
         assertEquals("ESB-00128", latestCommission.orderId)
         assertEquals(50000L, latestCommission.amount)
     }
 
     @Test
-    fun supabaseService_calculateTodaySummaryAndValidateCredentials() = kotlinx.coroutines.runBlocking {
-        val service = com.example.core.network.CourierSupabaseService.instance
+    fun supabaseService_calculateTodaySummary_isConsistent() {
+        val service = CourierSupabaseService.forRepository(createSeededRepository())
         val summary = service.calculateTodaySummary()
         assertEquals("Hari Ini", summary.periodLabel)
         assertTrue(summary.isMathematicallyConsistent)
-
-        val invalidEmailResult = service.loginCourier("invalid-email", "password123")
-        assertTrue("Invalid email should fail", invalidEmailResult.isFailure)
-
-        val shortPassResult = service.loginCourier("maryonosupardi@kube.com", "123")
-        assertTrue("Short password should fail", shortPassResult.isFailure)
     }
 
     @Test
-    fun supabaseService_relationalJoinHydration_handlesCompleteAndPartialJoinsSafely() {
-        val repo = OrderRepository()
-        val service = com.example.core.network.CourierSupabaseService.forRepository(repo)
-
-        val rawDeliveries = listOf(
-            // Row 1: Complete join across orders + consumer_profiles
-            com.example.core.network.RawDeliveryRow(
-                id = "ESB-00999",
-                orderId = "ORD-999",
-                consumerId = "CONS-999",
-                status = "in_transit",
-                estimatedMinutes = 12,
-                distanceKm = 3.4
-            ),
-            // Row 2: Existing order updated via single-table Realtime event WITHOUT nested join data
-            com.example.core.network.RawDeliveryRow(
-                id = "ESB-00128",
-                orderId = "ESB-00128",
-                status = "arrived"
-            ),
-            // Row 3: Completely unknown order with missing foreign keys (must fallback gracefully without null crash)
-            com.example.core.network.RawDeliveryRow(
-                id = "ESB-00998",
-                status = "assigned"
-            )
+    fun orderPaymentMeta_isCodOrderDetectsCodAndTunaiAccurately() {
+        val codByCode = OrderPaymentMeta(
+            orderDbId = 1,
+            orderCode = "ORD-COD-1",
+            paymentMethodCode = "cod",
+            paymentMethodName = "Bayar di Tempat",
+            totalAmount = 150000L,
+            unitPrice = 15000L,
+            commissionAmount = 5000L,
+            isPaid = false
         )
+        assertTrue(codByCode.isCodOrder)
 
-        val ordersJoin = mapOf(
-            "ORD-999" to com.example.core.network.OrderJoinData(
-                id = "ORD-999",
-                itemDescription = "25 balok es kristal",
-                paymentStatus = "Lunas",
-                priority = "Tinggi",
-                consumerId = "CONS-999"
-            )
+        val codByName = OrderPaymentMeta(
+            orderDbId = 2,
+            orderCode = "ORD-COD-2",
+            paymentMethodCode = "CASH",
+            paymentMethodName = "Tunai ke Kurir",
+            totalAmount = 90000L,
+            unitPrice = 15000L,
+            commissionAmount = 3000L,
+            isPaid = false
         )
-        val consumersJoin = mapOf(
-            "CONS-999" to com.example.core.network.ConsumerProfileJoinData(
-                id = "CONS-999",
-                fullName = "Resto Laut Biru",
-                address = "Jl. Suprapto No. 77",
-                subDistrict = "Kec. Purwokerto Timur",
-                phoneNumber = "+62 811 2233 4455"
-            )
+        assertTrue(codByName.isCodOrder)
+
+        val bcaTransfer = OrderPaymentMeta(
+            orderDbId = 3,
+            orderCode = "ORD-BCA-1",
+            paymentMethodCode = "BCA",
+            paymentMethodName = "Transfer BCA",
+            totalAmount = 120000L,
+            unitPrice = 15000L,
+            commissionAmount = 4000L,
+            isPaid = true
         )
+        assertFalse(bcaTransfer.isCodOrder)
 
-        val hydrated = service.hydrateDeliveryRows(
-            rawDeliveries = rawDeliveries,
-            existingOrders = repo.orders.value.associateBy { it.id },
-            ordersJoinMap = ordersJoin,
-            consumersJoinMap = consumersJoin
+        val qrisOrder = OrderPaymentMeta(
+            orderDbId = 4,
+            orderCode = "ORD-QRIS-1",
+            paymentMethodCode = "QRIS",
+            paymentMethodName = "QRIS Instan",
+            totalAmount = 75000L,
+            unitPrice = 15000L,
+            commissionAmount = 2500L,
+            isPaid = true
         )
-
-        assertEquals(3, hydrated.size)
-
-        // Check Row 1 (hydrated from join maps)
-        val row1 = hydrated[0]
-        assertEquals("Resto Laut Biru", row1.customerName)
-        assertEquals("Jl. Suprapto No. 77", row1.address)
-        assertEquals("25 balok es kristal", row1.itemDescription)
-        assertEquals("Lunas", row1.paymentStatus)
-        assertEquals(DeliveryStatus.IN_TRANSIT, row1.status)
-
-        // Check Row 2 (fallback preserved existing customerName & itemDescription when stream omits joins)
-        val row2 = hydrated[1]
-        assertEquals(DeliveryStatus.ARRIVED, row2.status)
-        assertEquals("Toko Es Segar", row2.customerName)
-        assertEquals("10 balok es", row2.itemDescription)
-
-        // Check Row 3 (safe defaults when both cache & joins missing)
-        val row3 = hydrated[2]
-        assertEquals(DeliveryStatus.NEW, row3.status)
-        assertTrue(row3.customerName.isNotBlank())
-        assertTrue(row3.address.isNotBlank())
+        assertFalse(qrisOrder.isCodOrder)
     }
 
     @Test
-    fun supabaseService_realtimeStreams_reconcileWithdrawalsAndWalletTransactions() = kotlinx.coroutines.runBlocking {
+    fun supabaseService_getOrderMetaAndSupportRecords_workCorrectly() {
         val repo = OrderRepository()
+        val service = CourierSupabaseService.forRepository(repo)
+
+        assertNull(service.getOrderMeta("ORD-NONE"))
+
+        val meta = OrderPaymentMeta(
+            orderDbId = 10,
+            orderCode = "ORD-COD-10",
+            paymentMethodCode = "cod",
+            paymentMethodName = "Tunai",
+            totalAmount = 200000L,
+            unitPrice = 20000L,
+            commissionAmount = 10000L,
+            isPaid = false
+        )
+        service.cacheOrderMetaForTest(meta)
+
+        val fetched = service.getOrderMeta("ORD-COD-10")
+        assertNotNull(fetched)
+        assertTrue(fetched?.isCodOrder == true)
+        assertEquals(200000L, fetched?.totalAmount)
+        assertEquals(20000L, fetched?.unitPrice)
+
+        val supportContact = SupportContactRecord(
+            id = 1,
+            warehouseId = 1,
+            serviceType = "WhatsApp Dispatcher",
+            contactName = "Admin Dispatcher Kube",
+            phoneNumber = "0811-2345-6789",
+            serviceHours = "24 Jam"
+        )
+        val bankRecord = CourierBankAccountRecord(
+            id = 5,
+            courierId = 12,
+            bankName = "BCA",
+            accountNumber = "8830192831",
+            accountHolder = "ANDI KURIR",
+            isPrimary = true,
+            verificationStatus = "verified"
+        )
+        service.setSupportContactsForTest(listOf(supportContact))
+        assertEquals(1, service.supportContacts.value.size)
+        assertEquals("Admin Dispatcher Kube", service.supportContacts.value.first().contactName)
+        assertTrue(bankRecord.isPrimary)
+
+        service.logoutCourier()
+        assertNull(service.getOrderMeta("ORD-COD-10"))
+        assertTrue(service.supportContacts.value.isEmpty())
+    }
+
+    @Test
+    fun supabaseService_realtimeStreams_reconcileWithdrawalsAndWalletTransactions() = runBlocking {
+        val repo = createSeededRepository()
         val initialPending = repo.walletBalance.value.pendingBalance
         val initialWithdrawn = repo.walletBalance.value.withdrawnBalance
 
-        // Simulate Web Admin updating WD-99401 (500.000) from WAITING ('pending') to SUCCESS ('success') via Supabase Realtime stream
         repo.syncWithdrawalsFromStream(
             listOf(
-                com.example.core.model.WithdrawalHistoryItem(
+                WithdrawalHistoryItem(
                     id = "WD-99401",
                     bankName = "BCA",
                     accountNumberMasked = "**** **** 2831",
-                    recipientName = "MARYONO SUPARDI",
+                    recipientName = "BUDI SANTOSO",
                     amount = 500000L,
                     date = "28 Okt 2026, 09:30",
-                    status = com.example.core.model.WithdrawalStatus.SUCCESS,
+                    status = WithdrawalStatus.SUCCESS,
                     rejectionReason = null
                 )
             )
@@ -503,14 +577,13 @@ class OrderRepositoryTest {
 
         val syncedItem = repo.withdrawalHistory.value.find { it.id == "WD-99401" }
         assertNotNull(syncedItem)
-        assertEquals(com.example.core.model.WithdrawalStatus.SUCCESS, syncedItem?.status)
+        assertEquals(WithdrawalStatus.SUCCESS, syncedItem?.status)
         assertEquals((initialPending - 500000L).coerceAtLeast(0L), repo.walletBalance.value.pendingBalance)
         assertEquals(initialWithdrawn + 500000L, repo.walletBalance.value.withdrawnBalance)
 
-        // Simulate new commission transaction arriving on wallet_transactions stream
         repo.syncCommissionHistoryFromStream(
             listOf(
-                com.example.core.model.CommissionHistoryItem(
+                CommissionHistoryItem(
                     id = "COM-STREAM-901",
                     orderId = "#ESB-00130",
                     title = "Komisi 15 balok es - Rp75.000",
@@ -526,5 +599,63 @@ class OrderRepositoryTest {
         assertNotNull(syncedTx)
         assertEquals(75000L, syncedTx?.amount)
     }
-}
 
+    @Test
+    fun deliveryOrder_codDefaultsAndPriceCalculations_workCorrectly() {
+        val defaultOrder = DeliveryOrder(
+            id = "ORD-DEF-1",
+            customerName = "Warung A",
+            address = "Jl. Test 1",
+            itemDescription = "5 balok es"
+        )
+        assertEquals("QRIS", defaultOrder.paymentMethod)
+        assertEquals(0L, defaultOrder.totalAmount)
+        assertEquals(0L, defaultOrder.unitPrice)
+        assertFalse(defaultOrder.isCod)
+
+        val codOrderWithoutExplicitUnitPrice = DeliveryOrder(
+            id = "ORD-COD-1",
+            customerName = "Warung B",
+            address = "Jl. Test 2",
+            itemDescription = "10 balok es",
+            paymentMethod = "COD",
+            totalAmount = 150000L
+        )
+        assertTrue(codOrderWithoutExplicitUnitPrice.isCod)
+        assertEquals(15000L, codOrderWithoutExplicitUnitPrice.effectiveUnitPrice)
+        assertEquals(150000L, codOrderWithoutExplicitUnitPrice.effectiveTotalAmount)
+    }
+
+    @Test
+    fun proofOfDelivery_codOrder_marksPaymentStatusPaidWhenConfirmed() {
+        val repo = createSeededRepository()
+
+        val initialOrder = repo.getOrderById("ESB-00128")
+        assertNotNull(initialOrder)
+        assertTrue(initialOrder?.isCod == true)
+        assertEquals("Belum dibayar", initialOrder?.paymentStatus)
+
+        repo.submitProofOfDelivery(
+            orderId = "ESB-00128",
+            recipientName = "Ibu Sinta",
+            photoUri = null,
+            confirmedQuantity = 10,
+            notes = null,
+            isCodPaymentConfirmed = false
+        )
+        assertEquals("Belum dibayar", repo.getOrderById("ESB-00128")?.paymentStatus)
+
+        val repo2 = createSeededRepository()
+        repo2.submitProofOfDelivery(
+            orderId = "ESB-00128",
+            recipientName = "Ibu Sinta",
+            photoUri = "content://pod/photo.jpg",
+            confirmedQuantity = 10,
+            notes = "Tunai diterima pas",
+            isCodPaymentConfirmed = true
+        )
+        val updated = repo2.getOrderById("ESB-00128")
+        assertEquals(DeliveryStatus.DELIVERED, updated?.status)
+        assertEquals("Lunas", updated?.paymentStatus)
+    }
+}

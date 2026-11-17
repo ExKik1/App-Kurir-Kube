@@ -15,17 +15,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -34,6 +37,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,20 +52,29 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.core.components.LiquidDarkGlassCard
+import com.example.core.network.CourierSupabaseService
+import com.example.core.network.SupportContactRecord
+import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeCyan
 import com.example.ui.theme.KubeGreen
 
 /**
- * Dialog Bantuan & Dispatcher Kube dengan tema Liquid Dark Glass.
- * Teks berwarna putih/terang dengan kontras tinggi, dan nomor kontak/WhatsApp
- * dapat diklik langsung untuk membuka aplikasi telepon atau WhatsApp.
+ * Dialog Bantuan & Admin Kube dengan tema Liquid Dark Glass.
+ * Menampilkan daftar kontak bantuan secara real-time dari tabel `support_contacts` Supabase
+ * serta aksi langsung untuk menelepon atau mengirim pesan WhatsApp.
  */
 @Composable
 fun SupportGlassDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val courier by OrderRepository.instance.courier.collectAsState()
+    val supportContacts by CourierSupabaseService.instance.supportContacts.collectAsState()
+
+    LaunchedEffect(Unit) {
+        runCatching { CourierSupabaseService.instance.syncAllTablesOnce() }
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         LiquidDarkGlassCard(
@@ -102,14 +117,14 @@ fun SupportGlassDialog(
 
                         Column {
                             Text(
-                                text = "Bantuan & Dispatcher",
+                                text = "Bantuan & Admin Kube",
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Pusat Koordinasi Lapangan Kube 24 Jam",
+                                text = "Kontak Operasional & Dispatcher Resmi",
                                 fontSize = 11.sp,
                                 color = Color.White.copy(alpha = 0.75f)
                             )
@@ -118,7 +133,7 @@ fun SupportGlassDialog(
 
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Close,
@@ -129,7 +144,7 @@ fun SupportGlassDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Info Banner
                 Surface(
@@ -139,7 +154,7 @@ fun SupportGlassDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Klik pada kontak di bawah untuk langsung menghubungi dispatcher logistik Kube saat terjadi kendala rute, stok, atau kendaraan.",
+                        text = "Pilih kontak admin atau dispatcher di bawah untuk menghubungi via WhatsApp atau panggilan telepon langsung.",
                         fontSize = 12.sp,
                         color = Color.White.copy(alpha = 0.90f),
                         lineHeight = 16.sp,
@@ -149,46 +164,52 @@ fun SupportGlassDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Contact Actions List
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // 1. WhatsApp Dispatcher
-                    SupportActionGlassItem(
-                        icon = Icons.Filled.Message,
-                        iconTint = KubeGreen,
-                        iconBg = KubeGreen.copy(alpha = 0.20f),
-                        title = "WhatsApp Dispatcher",
-                        subtitle = "0811-2345-6789 (Respon Cepat)",
-                        tag = "btn_contact_whatsapp",
-                        onClick = {
-                            openWhatsApp(context, "6281123456789", "Halo Dispatcher Kube, saya kurir Maryono Supardi (CR-098) membutuhkan bantuan operasional.")
+                // Contact Actions List (Live from Supabase `support_contacts`)
+                if (supportContacts.isEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color.White.copy(alpha = 0.08f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("support_contacts_empty")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.SupportAgent,
+                                contentDescription = null,
+                                tint = KubeCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Memuat daftar kontak bantuan dari Supabase... Pastikan koneksi internet tersedia.",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.80f),
+                                lineHeight = 17.sp
+                            )
                         }
-                    )
-
-                    // 2. Hotline Telepon Kantor
-                    SupportActionGlassItem(
-                        icon = Icons.Filled.Phone,
-                        iconTint = KubeCyan,
-                        iconBg = KubeCyan.copy(alpha = 0.20f),
-                        title = "Hotline Telepon Kantor",
-                        subtitle = "(0281) 632-889 (Pabrik Es Banyumas)",
-                        tag = "btn_contact_phone",
-                        onClick = {
-                            dialPhoneNumber(context, "0281632889")
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        supportContacts.forEach { contact ->
+                            SupportContactGlassCard(
+                                contact = contact,
+                                courierName = courier.name,
+                                courierId = courier.id.ifBlank { "-" },
+                                context = context
+                            )
                         }
-                    )
-
-                    // 3. Layanan Darurat Kendaraan
-                    SupportActionGlassItem(
-                        icon = Icons.Filled.Warning,
-                        iconTint = Color(0xFFFFB74D),
-                        iconBg = Color(0xFFFFB74D).copy(alpha = 0.20f),
-                        title = "Darurat Armada & Mesin",
-                        subtitle = "0812-9988-7766 (Derek / Mekanik)",
-                        tag = "btn_contact_emergency",
-                        onClick = {
-                            dialPhoneNumber(context, "081299887766")
-                        }
-                    )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -200,7 +221,7 @@ fun SupportGlassDialog(
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(46.dp)
+                        .height(48.dp)
                         .testTag("btn_close_support_dialog")
                 ) {
                     Text(
@@ -215,99 +236,198 @@ fun SupportGlassDialog(
 }
 
 @Composable
-private fun SupportActionGlassItem(
-    icon: ImageVector,
-    iconTint: Color,
-    iconBg: Color,
-    title: String,
-    subtitle: String,
-    tag: String,
-    onClick: () -> Unit
+private fun SupportContactGlassCard(
+    contact: SupportContactRecord,
+    courierName: String,
+    courierId: String,
+    context: Context
 ) {
+    val serviceLower = contact.serviceType.lowercase()
+    val (icon: ImageVector, iconTint: Color, iconBg: Color) = when {
+        serviceLower.contains("darurat") || serviceLower.contains("mekanik") || serviceLower.contains("armada") -> {
+            Triple(Icons.Filled.Warning, Color(0xFFFFB74D), Color(0xFFFFB74D).copy(alpha = 0.20f))
+        }
+        serviceLower.contains("wa") || serviceLower.contains("whatsapp") || serviceLower.contains("dispatcher") -> {
+            Triple(Icons.Filled.Message, KubeGreen, KubeGreen.copy(alpha = 0.20f))
+        }
+        else -> {
+            Triple(Icons.Filled.Phone, KubeCyan, KubeCyan.copy(alpha = 0.20f))
+        }
+    }
+
+    val waDigits = normalizeWhatsappDigits(contact.phoneNumber)
+    val greetingMsg = "Halo ${contact.contactName}, saya kurir $courierName (ID: $courierId) membutuhkan bantuan (${contact.serviceType})."
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .testTag(tag),
+            .clickable {
+                if (serviceLower.contains("wa") || serviceLower.contains("whatsapp")) {
+                    openWhatsApp(context, waDigits, greetingMsg)
+                } else {
+                    dialPhoneNumber(context, contact.phoneNumber)
+                }
+            }
+            .testTag("support_contact_item_${contact.id}"),
         shape = RoundedCornerShape(16.dp),
         color = Color.White.copy(alpha = 0.12f),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.22f))
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(12.dp)
         ) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(40.dp)
                         .clip(CircleShape)
                         .background(iconBg),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = icon,
-                        contentDescription = null,
+                        contentDescription = contact.serviceType,
                         tint = iconTint,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = title,
+                        text = contact.contactName,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = subtitle,
+                        text = "${contact.serviceType} • ${contact.serviceHours}",
+                        fontSize = 11.sp,
+                        color = KubeCyan
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = contact.phoneNumber.ifBlank { "-" },
                         fontSize = 12.sp,
-                        color = Color.White.copy(alpha = 0.80f)
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White.copy(alpha = 0.85f)
                     )
                 }
             }
 
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = null,
-                tint = KubeCyan,
-                modifier = Modifier.size(16.dp)
-            )
+            if (contact.phoneNumber.isNotBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { dialPhoneNumber(context, contact.phoneNumber) }
+                            .testTag("btn_call_contact_${contact.id}"),
+                        shape = RoundedCornerShape(10.dp),
+                        color = KubeCyan.copy(alpha = 0.18f),
+                        border = BorderStroke(0.8.dp, KubeCyan.copy(alpha = 0.45f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Phone,
+                                contentDescription = "Telepon ${contact.contactName}",
+                                tint = KubeCyan,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Telepon",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { openWhatsApp(context, waDigits, greetingMsg) }
+                            .testTag("btn_wa_contact_${contact.id}"),
+                        shape = RoundedCornerShape(10.dp),
+                        color = KubeGreen.copy(alpha = 0.22f),
+                        border = BorderStroke(0.8.dp, KubeGreen.copy(alpha = 0.50f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Message,
+                                contentDescription = "WhatsApp ${contact.contactName}",
+                                tint = KubeGreen,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "WhatsApp",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
         }
+    }
+}
+
+internal fun normalizeWhatsappDigits(phoneNumber: String): String {
+    val digitsOnly = phoneNumber.filter { it.isDigit() }
+    return when {
+        digitsOnly.startsWith("0") -> "62" + digitsOnly.drop(1)
+        digitsOnly.startsWith("62") -> digitsOnly
+        else -> digitsOnly
     }
 }
 
 private fun dialPhoneNumber(context: Context, phoneNumber: String) {
+    val cleanNumber = phoneNumber.trim()
     runCatching {
         val intent = Intent(Intent.ACTION_DIAL).apply {
-            data = Uri.parse("tel:$phoneNumber")
+            data = Uri.parse("tel:$cleanNumber")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
     }.onFailure {
-        Toast.makeText(context, "Membuka telepon: $phoneNumber", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Membuka telepon: $cleanNumber", Toast.LENGTH_SHORT).show()
     }
 }
 
-private fun openWhatsApp(context: Context, phoneNumber: String, message: String) {
+private fun openWhatsApp(context: Context, phoneNumberDigits: String, message: String) {
     runCatching {
-        val url = "https://wa.me/$phoneNumber?text=${Uri.encode(message)}"
+        val url = "https://wa.me/$phoneNumberDigits?text=${Uri.encode(message)}"
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
     }.onFailure {
-        Toast.makeText(context, "Membuka WhatsApp: +$phoneNumber", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Membuka WhatsApp: +$phoneNumberDigits", Toast.LENGTH_SHORT).show()
     }
 }

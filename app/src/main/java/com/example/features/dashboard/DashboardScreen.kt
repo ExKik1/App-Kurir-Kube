@@ -84,13 +84,16 @@ fun DashboardScreen(
     onNavigateToProfile: () -> Unit
 ) {
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialCourier = remember(repository) { repository.courier.value }
     val initialOrders = remember(repository) { repository.orders.value }
     val initialWallet = remember(repository) { repository.walletBalance.value }
+    val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
 
-    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
-    val orders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
-    val walletBalance by supabaseService.streamWalletSummary().collectAsState(initial = initialWallet)
+    val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
+    val orders by supabaseService.streamMyDeliveries(courierProfileId).collectAsState(initial = initialOrders)
+    val walletBalance by supabaseService.streamWalletSummary(courierProfileId).collectAsState(initial = initialWallet)
+    val notifications by supabaseService.streamNotifications(courierProfileId).collectAsState(initial = emptyList())
     // Single Source of Truth for all dashboard metrics: DailyStatsProvider
     val dailyStats = remember(orders) { supabaseService.calculateTodaySummary(orders) }
 
@@ -113,7 +116,7 @@ fun DashboardScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        "Pencairan otomatis setiap hari Jumat ke rekening BCA terverifikasi.",
+                        "Pencairan ke rekening ${courier.bankName.ifBlank { "bank" }} terverifikasi (${notifications.size} notifikasi aktif).",
                         fontSize = 13.sp,
                         color = Color(0xFF4A6B82)
                     )
