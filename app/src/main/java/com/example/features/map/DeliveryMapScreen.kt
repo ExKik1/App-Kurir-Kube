@@ -63,6 +63,7 @@ import com.example.core.components.LiquidGlassCard
 import com.example.core.components.TopCourierBar
 import com.example.core.model.DeliveryOrder
 import com.example.core.model.DeliveryStatus
+import com.example.core.network.CourierSupabaseService
 import com.example.core.network.DirectionsService
 import com.example.core.repository.OrderRepository
 import com.example.features.delivery.ProofOfDeliveryBottomSheet
@@ -81,8 +82,12 @@ fun DeliveryMapScreen(
     onNavigateBack: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {}
 ) {
-    val orders by repository.orders.collectAsState()
-    val courier by repository.courier.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialOrders = remember(repository) { repository.orders.value }
+    val initialCourier = remember(repository) { repository.courier.value }
+
+    val orders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
     val routeEta by directionsService.routeEta.collectAsState()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -469,7 +474,7 @@ fun DeliveryMapScreen(
                     )
 
                     TimelineStep(
-                        isCompleted = currentOrder.status == DeliveryStatus.ARRIVED || currentOrder.status == DeliveryStatus.PENDING_VERIFICATION || currentOrder.status == DeliveryStatus.DELIVERED,
+                        isCompleted = currentOrder.status == DeliveryStatus.ARRIVED || currentOrder.status == DeliveryStatus.DELIVERED,
                         isActive = currentOrder.status == DeliveryStatus.IN_TRANSIT,
                         icon = Icons.Filled.LocalShipping,
                         title = "Dalam Perjalanan",
@@ -477,56 +482,19 @@ fun DeliveryMapScreen(
                         isLast = false
                     )
 
+                    // Poin Ketiga: Terkirim langsung aktif dengan centang hijau saat PoD selesai
                     TimelineStep(
                         isCompleted = currentOrder.status == DeliveryStatus.DELIVERED,
-                        isActive = currentOrder.status == DeliveryStatus.ARRIVED || currentOrder.status == DeliveryStatus.PENDING_VERIFICATION,
-                        icon = if (currentOrder.status == DeliveryStatus.PENDING_VERIFICATION) Icons.Filled.AccessTime else Icons.Filled.CheckCircle,
-                        title = if (currentOrder.status == DeliveryStatus.PENDING_VERIFICATION) "Menunggu Verifikasi Admin" else "Terkirim",
-                        subtitle = when (currentOrder.status) {
-                            DeliveryStatus.DELIVERED -> "Telah diverifikasi dan selesai\n${currentOrder.deliveredTime ?: "10:10 | 28 Okt 2026"}"
-                            DeliveryStatus.PENDING_VERIFICATION -> "Laporan PoD diserahkan oleh ${currentOrder.proofOfDelivery?.recipientName ?: "Penerima"}\nMenunggu verifikasi admin Kube"
-                            else -> "Menunggu serah terima es batu & isi PoD"
+                        isActive = currentOrder.status == DeliveryStatus.ARRIVED,
+                        icon = Icons.Filled.CheckCircle,
+                        title = "Terkirim",
+                        subtitle = if (currentOrder.status == DeliveryStatus.DELIVERED) {
+                            "Terkirim ke ${currentOrder.proofOfDelivery?.recipientName ?: currentOrder.customerName}\n${currentOrder.deliveredTime ?: "10:15 | 28 Okt 2026"}"
+                        } else {
+                            "Menunggu serah terima es batu & isi PoD"
                         },
                         isLast = true
                     )
-                }
-            }
-
-            // PoD Verification Summary Card when PENDING_VERIFICATION
-            if (currentOrder.status == DeliveryStatus.PENDING_VERIFICATION && currentOrder.proofOfDelivery != null) {
-                Spacer(modifier = Modifier.height(14.dp))
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color(0xFFFFF3E0),
-                    border = BorderStroke(1.2.dp, Color(0xFFFFB74D))
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                imageVector = Icons.Filled.AccessTime,
-                                contentDescription = null,
-                                tint = Color(0xFFE65100),
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Laporan PoD Sedang Diverifikasi",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = Color(0xFFE65100)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "• Penerima: ${currentOrder.proofOfDelivery.recipientName}\n• Jumlah: ${currentOrder.proofOfDelivery.confirmedQuantity} unit dikonfirmasi\n• Catatan: ${currentOrder.proofOfDelivery.notes ?: "Tidak ada catatan"}\n• Waktu Submit: ${currentOrder.proofOfDelivery.submittedAt}",
-                            fontSize = 11.sp,
-                            color = Color(0xFF4E342E),
-                            lineHeight = 16.sp
-                        )
-                    }
                 }
             }
 
@@ -541,14 +509,12 @@ fun DeliveryMapScreen(
                 val buttonText = when (currentOrder.status) {
                     DeliveryStatus.IN_TRANSIT -> "Saya Sudah Tiba"
                     DeliveryStatus.ARRIVED -> "Konfirmasi Es Diterima (Isi PoD)"
-                    DeliveryStatus.PENDING_VERIFICATION -> "Menunggu Verifikasi Admin"
                     DeliveryStatus.DELIVERED -> "Pengiriman Telah Selesai"
                     else -> "Mulai Antar Sekarang"
                 }
 
                 val buttonColor = when (currentOrder.status) {
                     DeliveryStatus.DELIVERED -> Color(0xFF2E7D32)
-                    DeliveryStatus.PENDING_VERIFICATION -> Color(0xFFF57C00)
                     else -> Color(0xFF0096C7)
                 }
 
@@ -556,23 +522,32 @@ fun DeliveryMapScreen(
                     onClick = {
                         when (currentOrder.status) {
                             DeliveryStatus.IN_TRANSIT -> {
-                                repository.updateOrderStatus(currentOrder.id, DeliveryStatus.ARRIVED)
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Status diperbarui: Anda telah tiba di lokasi pelanggan!")
+                                    try {
+                                        CourierSupabaseService.instance.updateDeliveryProgress(
+                                            currentOrder.id,
+                                            DeliveryStatus.ARRIVED
+                                        )
+                                        snackbarHostState.showSnackbar("Status diperbarui: Anda telah tiba di lokasi pelanggan!")
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("Gagal memperbarui status: ${e.message ?: "Coba lagi."}")
+                                    }
                                 }
                             }
                             DeliveryStatus.ARRIVED -> {
                                 showProofOfDeliverySheet = true
                             }
-                            DeliveryStatus.PENDING_VERIFICATION -> {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Data pesanan #${currentOrder.id} sedang diverifikasi oleh admin Kube.")
-                                }
-                            }
                             DeliveryStatus.NEW -> {
-                                repository.updateOrderStatus(currentOrder.id, DeliveryStatus.IN_TRANSIT)
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Pesanan #${currentOrder.id} sekarang dalam perjalanan.")
+                                    try {
+                                        CourierSupabaseService.instance.updateDeliveryProgress(
+                                            currentOrder.id,
+                                            DeliveryStatus.IN_TRANSIT
+                                        )
+                                        snackbarHostState.showSnackbar("Pesanan #${currentOrder.id} sekarang dalam perjalanan.")
+                                    } catch (e: Exception) {
+                                        snackbarHostState.showSnackbar("Gagal memperbarui status: ${e.message ?: "Coba lagi."}")
+                                    }
                                 }
                             }
                             DeliveryStatus.DELIVERED -> {
@@ -596,10 +571,7 @@ fun DeliveryMapScreen(
                         horizontalArrangement = Arrangement.Center
                     ) {
                         Icon(
-                            imageVector = when (currentOrder.status) {
-                                DeliveryStatus.PENDING_VERIFICATION -> Icons.Filled.AccessTime
-                                else -> Icons.Filled.CheckCircle
-                            },
+                            imageVector = Icons.Filled.CheckCircle,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp)
                         )
@@ -628,16 +600,31 @@ fun DeliveryMapScreen(
                 order = currentOrder,
                 onDismissRequest = { showProofOfDeliverySheet = false },
                 onSubmitProof = { recipientName, photoUri, confirmedQty, notes ->
-                    repository.submitProofOfDelivery(
-                        orderId = currentOrder.id,
-                        recipientName = recipientName,
-                        photoUri = photoUri,
-                        confirmedQuantity = confirmedQty,
-                        notes = notes
-                    )
                     showProofOfDeliverySheet = false
                     coroutineScope.launch {
-                        snackbarHostState.showSnackbar("Laporan PoD berhasil dikirim! Data pesanan #${currentOrder.id} sedang diverifikasi admin.")
+                        try {
+                            val res = CourierSupabaseService.instance.completeDeliveryWithPoD(
+                                orderId = currentOrder.id,
+                                recipientName = recipientName,
+                                photoUri = photoUri,
+                                confirmedQuantity = confirmedQty,
+                                notes = notes
+                            )
+                            res.fold(
+                                onSuccess = {
+                                    snackbarHostState.showSnackbar(
+                                        "Pengiriman berhasil diselesaikan! Pesanan #${currentOrder.id} masuk ke riwayat & komisi masuk ke Saldo Tertunda."
+                                    )
+                                },
+                                onFailure = { err ->
+                                    snackbarHostState.showSnackbar(
+                                        err.message ?: "Gagal mengirim laporan PoD. Silakan coba lagi."
+                                    )
+                                }
+                            )
+                        } catch (e: Exception) {
+                            snackbarHostState.showSnackbar("Terjadi kendala saat menyelesaikan pengiriman.")
+                        }
                     }
                 }
             )

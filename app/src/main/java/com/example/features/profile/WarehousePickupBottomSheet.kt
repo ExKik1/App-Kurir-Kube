@@ -38,6 +38,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +49,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.core.network.CourierSupabaseService
+import com.example.core.network.WarehouseInfo
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
@@ -54,7 +58,7 @@ import com.example.ui.theme.KubeTextMuted
 /**
  * ModalBottomSheet bergaya Liquid Glass untuk Informasi Gudang / Pick Up.
  * Menampilkan Nama Gudang, Alamat Lengkap, Jam Operasional, dan tombol Maps
- * untuk membuka rute navigasi ke gudang.
+ * yang tersinkronisasi real-time dari tabel `warehouses` Supabase.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,9 +68,12 @@ fun WarehousePickupBottomSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
 
-    val warehouseName = "Pabrik Es Kube Banyumas (Depot Utama)"
-    val warehouseAddress = "Jl. Raya Industri No. 4, Kec. Purwokerto Barat, Kab. Banyumas, Jawa Tengah 53134"
-    val operationalHours = "24 Jam Non-Stop (Loading Dock & Cold Storage Aktif)"
+    val warehouse by CourierSupabaseService.instance
+        .streamWarehouseInfo()
+        .collectAsState(initial = WarehouseInfo())
+    val warehouseName = warehouse.name
+    val warehouseAddress = warehouse.address
+    val operationalHours = warehouse.operationalHours
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -274,7 +281,7 @@ fun WarehousePickupBottomSheet(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Fasilitas: Cold Storage -20°C, Crane Loading Es Balok, dan Jalur Cepat Kurir.",
+                        text = "Fasilitas: ${warehouse.facilities}",
                         fontSize = 11.sp,
                         color = Color(0xFF0369A1),
                         lineHeight = 15.sp
@@ -287,7 +294,7 @@ fun WarehousePickupBottomSheet(
             // Action: Tombol Ikon Maps untuk membuka navigasi rute ke gudang
             Button(
                 onClick = {
-                    openGoogleMapsRoute(context, -7.4245, 109.2300, warehouseName)
+                    openGoogleMapsRoute(context, warehouse.latitude, warehouse.longitude, warehouseName)
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright),
                 shape = RoundedCornerShape(14.dp),

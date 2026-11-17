@@ -145,7 +145,7 @@ class OrderRepositoryTest {
     }
 
     @Test
-    fun proofOfDelivery_submissionSetsStatusToPendingVerificationNotDirectlyDelivered() {
+    fun proofOfDelivery_submissionImmediatelySetsStatusToDeliveredAndMovesToHistory() {
         val repo = OrderRepository()
 
         // Kurir tiba di lokasi
@@ -153,7 +153,7 @@ class OrderRepositoryTest {
         val arrivedOrder = repo.getOrderById("ESB-00128")
         assertEquals(DeliveryStatus.ARRIVED, arrivedOrder?.status)
 
-        // Kurir mengisi form PoD dan menekan Kirim Laporan
+        // Kurir mengisi form PoD dan menekan Selesaikan Pengiriman
         repo.submitProofOfDelivery(
             orderId = "ESB-00128",
             recipientName = "Bpk. Bambang Sutrisno",
@@ -162,26 +162,26 @@ class OrderRepositoryTest {
             notes = "Ditaruh di freezer belakang toko"
         )
 
-        val pendingOrder = repo.getOrderById("ESB-00128")
-        assertNotNull("Order should exist", pendingOrder)
+        val deliveredOrder = repo.getOrderById("ESB-00128")
+        assertNotNull("Order should exist", deliveredOrder)
 
-        // Logika Submit: Wajib berstatus Menunggu Verifikasi Admin (TIDAK langsung Selesai / DELIVERED)
-        assertEquals(DeliveryStatus.PENDING_VERIFICATION, pendingOrder?.status)
-        assertTrue("Order awaiting verification must still be AKTIF", pendingOrder?.isAktif == true)
-        assertTrue("Order awaiting verification must NOT be in RIWAYAT (Selesai) yet", pendingOrder?.isRiwayat == false)
+        // Logika Submit Baru (tanpa approval admin): Langsung Selesai / DELIVERED
+        assertEquals(DeliveryStatus.DELIVERED, deliveredOrder?.status)
+        assertTrue("Delivered order must NOT be in queue (AKTIF)", deliveredOrder?.isAktif == false)
+        assertTrue("Delivered order must be in RIWAYAT (Selesai)", deliveredOrder?.isRiwayat == true)
 
         // Data PoD tersimpan lengkap
-        val pod = pendingOrder?.proofOfDelivery
+        val pod = deliveredOrder?.proofOfDelivery
         assertNotNull("PoD details must be recorded", pod)
         assertEquals("Bpk. Bambang Sutrisno", pod?.recipientName)
         assertEquals(10, pod?.confirmedQuantity)
         assertEquals("Ditaruh di freezer belakang toko", pod?.notes)
         assertNotNull(pod?.photoUri)
 
-        // Invarian statistik harian tetap konsisten (20 == 12 Selesai + 5 Diantar/Verifikasi + 3 Menunggu + 0 Retur)
+        // Invarian statistik harian tetap konsisten (20 == 13 Selesai + 4 Diantar + 3 Menunggu + 0 Retur)
         val stats = repo.dailyStats.value
-        assertEquals(12, stats.completedOrders) // Belum bertambah karena masih diverifikasi admin
-        assertEquals(5, stats.inDeliveryOrders)
+        assertEquals(13, stats.completedOrders) // Langsung bertambah menjadi 13
+        assertEquals(4, stats.inDeliveryOrders)  // Berkurang dari 5 menjadi 4
         assertEquals(3, stats.newTasksOrders)
         assertEquals(20, stats.totalOrders)
         assertTrue(stats.isMathematicallyConsistent)
@@ -367,4 +367,164 @@ class OrderRepositoryTest {
             it.status == com.example.core.model.DeliveryStatus.NEW
         })
     }
+
+    @Test
+    fun proofOfDelivery_submissionCreditsCommissionToPendingBalance() {
+        val repo = OrderRepository()
+        val initialPending = repo.walletBalance.value.pendingBalance
+
+        repo.submitProofOfDelivery(
+            orderId = "ESB-00128",
+            recipientName = "Bpk. Bambang",
+            photoUri = "https://wopqozbstvtuhxkuciun.supabase.co/storage/v1/object/public/pod-photos/test.jpg",
+            confirmedQuantity = 10,
+            notes = "Selesai"
+        )
+
+        val updatedPending = repo.walletBalance.value.pendingBalance
+        assertEquals(initialPending + 50000L, updatedPending)
+        val latestCommission = repo.commissionHistory.value.first()
+        assertEquals("ESB-00128", latestCommission.orderId)
+        assertEquals(50000L, latestCommission.amount)
+    }
+
+    @Test
+    fun supabaseService_calculateTodaySummaryAndValidateCredentials() = kotlinx.coroutines.runBlocking {
+        val service = com.example.core.network.CourierSupabaseService.instance
+        val summary = service.calculateTodaySummary()
+        assertEquals("Hari Ini", summary.periodLabel)
+        assertTrue(summary.isMathematicallyConsistent)
+
+        val invalidEmailResult = service.loginCourier("invalid-email", "password123")
+        assertTrue("Invalid email should fail", invalidEmailResult.isFailure)
+
+        val shortPassResult = service.loginCourier("maryonosupardi@kube.com", "123")
+        assertTrue("Short password should fail", shortPassResult.isFailure)
+    }
+
+    @Test
+    fun supabaseService_relationalJoinHydration_handlesCompleteAndPartialJoinsSafely() {
+        val repo = OrderRepository()
+        val service = com.example.core.network.CourierSupabaseService.forRepository(repo)
+
+        val rawDeliveries = listOf(
+            // Row 1: Complete join across orders + consumer_profiles
+            com.example.core.network.RawDeliveryRow(
+                id = "ESB-00999",
+                orderId = "ORD-999",
+                consumerId = "CONS-999",
+                status = "in_transit",
+                estimatedMinutes = 12,
+                distanceKm = 3.4
+            ),
+            // Row 2: Existing order updated via single-table Realtime event WITHOUT nested join data
+            com.example.core.network.RawDeliveryRow(
+                id = "ESB-00128",
+                orderId = "ESB-00128",
+                status = "arrived"
+            ),
+            // Row 3: Completely unknown order with missing foreign keys (must fallback gracefully without null crash)
+            com.example.core.network.RawDeliveryRow(
+                id = "ESB-00998",
+                status = "assigned"
+            )
+        )
+
+        val ordersJoin = mapOf(
+            "ORD-999" to com.example.core.network.OrderJoinData(
+                id = "ORD-999",
+                itemDescription = "25 balok es kristal",
+                paymentStatus = "Lunas",
+                priority = "Tinggi",
+                consumerId = "CONS-999"
+            )
+        )
+        val consumersJoin = mapOf(
+            "CONS-999" to com.example.core.network.ConsumerProfileJoinData(
+                id = "CONS-999",
+                fullName = "Resto Laut Biru",
+                address = "Jl. Suprapto No. 77",
+                subDistrict = "Kec. Purwokerto Timur",
+                phoneNumber = "+62 811 2233 4455"
+            )
+        )
+
+        val hydrated = service.hydrateDeliveryRows(
+            rawDeliveries = rawDeliveries,
+            existingOrders = repo.orders.value.associateBy { it.id },
+            ordersJoinMap = ordersJoin,
+            consumersJoinMap = consumersJoin
+        )
+
+        assertEquals(3, hydrated.size)
+
+        // Check Row 1 (hydrated from join maps)
+        val row1 = hydrated[0]
+        assertEquals("Resto Laut Biru", row1.customerName)
+        assertEquals("Jl. Suprapto No. 77", row1.address)
+        assertEquals("25 balok es kristal", row1.itemDescription)
+        assertEquals("Lunas", row1.paymentStatus)
+        assertEquals(DeliveryStatus.IN_TRANSIT, row1.status)
+
+        // Check Row 2 (fallback preserved existing customerName & itemDescription when stream omits joins)
+        val row2 = hydrated[1]
+        assertEquals(DeliveryStatus.ARRIVED, row2.status)
+        assertEquals("Toko Es Segar", row2.customerName)
+        assertEquals("10 balok es", row2.itemDescription)
+
+        // Check Row 3 (safe defaults when both cache & joins missing)
+        val row3 = hydrated[2]
+        assertEquals(DeliveryStatus.NEW, row3.status)
+        assertTrue(row3.customerName.isNotBlank())
+        assertTrue(row3.address.isNotBlank())
+    }
+
+    @Test
+    fun supabaseService_realtimeStreams_reconcileWithdrawalsAndWalletTransactions() = kotlinx.coroutines.runBlocking {
+        val repo = OrderRepository()
+        val initialPending = repo.walletBalance.value.pendingBalance
+        val initialWithdrawn = repo.walletBalance.value.withdrawnBalance
+
+        // Simulate Web Admin updating WD-99401 (500.000) from WAITING ('pending') to SUCCESS ('success') via Supabase Realtime stream
+        repo.syncWithdrawalsFromStream(
+            listOf(
+                com.example.core.model.WithdrawalHistoryItem(
+                    id = "WD-99401",
+                    bankName = "BCA",
+                    accountNumberMasked = "**** **** 2831",
+                    recipientName = "MARYONO SUPARDI",
+                    amount = 500000L,
+                    date = "28 Okt 2026, 09:30",
+                    status = com.example.core.model.WithdrawalStatus.SUCCESS,
+                    rejectionReason = null
+                )
+            )
+        )
+
+        val syncedItem = repo.withdrawalHistory.value.find { it.id == "WD-99401" }
+        assertNotNull(syncedItem)
+        assertEquals(com.example.core.model.WithdrawalStatus.SUCCESS, syncedItem?.status)
+        assertEquals((initialPending - 500000L).coerceAtLeast(0L), repo.walletBalance.value.pendingBalance)
+        assertEquals(initialWithdrawn + 500000L, repo.walletBalance.value.withdrawnBalance)
+
+        // Simulate new commission transaction arriving on wallet_transactions stream
+        repo.syncCommissionHistoryFromStream(
+            listOf(
+                com.example.core.model.CommissionHistoryItem(
+                    id = "COM-STREAM-901",
+                    orderId = "#ESB-00130",
+                    title = "Komisi 15 balok es - Rp75.000",
+                    subtitle = "Resto Seafood Bahari (#ESB-00130) · Baru saja",
+                    amount = 75000L,
+                    isTip = false,
+                    timestamp = "Baru saja"
+                )
+            )
+        )
+
+        val syncedTx = repo.commissionHistory.value.find { it.id == "COM-STREAM-901" }
+        assertNotNull(syncedTx)
+        assertEquals(75000L, syncedTx?.amount)
+    }
 }
+

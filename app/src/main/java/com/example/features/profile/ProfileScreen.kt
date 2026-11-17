@@ -58,7 +58,10 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.example.core.network.CourierSupabaseService
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -143,8 +146,12 @@ private fun ProfileMainContent(
     onNavigateToSubScreen: (ProfileSubScreen) -> Unit,
     onSignOut: () -> Unit
 ) {
-    val courier by repository.courier.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialCourier = remember(repository) { repository.courier.value }
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val warehouse by supabaseService.streamWarehouseInfo().collectAsState(initial = com.example.core.network.WarehouseInfo())
     val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
 
     var showVehicleInfoSheet by remember { mutableStateOf(false) }
     var showCredentialsSheet by remember { mutableStateOf(false) }
@@ -268,6 +275,25 @@ private fun ProfileMainContent(
                     }
                 }
 
+                // Official Brand Ice Cube Logo in Profile Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.logo_kube_cube),
+                        contentDescription = "Logo Kubus Es Kube",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Text(
+                        text = "Profil Kurir Kube",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = KubeTextDark
+                    )
+                }
+
                 Surface(
                     modifier = Modifier
                         .size(44.dp)
@@ -377,10 +403,21 @@ private fun ProfileMainContent(
                     onClick = { onNavigateToSubScreen(ProfileSubScreen.EDIT_PROFILE) }
                 )
 
-                // 2. Status Bertugas (Toggle Aktif/Tidak Aktif)
+                // 2. Status Bertugas (Toggle Aktif/Tidak Aktif via CourierSupabaseService.toggleOnDuty)
                 ProfileDutyToggleItem(
                     isActiveDuty = courier.isActiveDuty,
-                    onToggle = { repository.updateCourierDuty(it) },
+                    onToggle = { newDuty ->
+                        coroutineScope.launch {
+                            try {
+                                CourierSupabaseService.instance.toggleOnDuty(
+                                    courierId = courier.id,
+                                    isOnDuty = newDuty
+                                )
+                            } catch (_: Exception) {
+                                repository.updateCourierDuty(newDuty)
+                            }
+                        }
+                    },
                     tag = "profile_item_status_bertugas"
                 )
 
@@ -417,7 +454,7 @@ private fun ProfileMainContent(
                 ProfileMenuGlassItem(
                     icon = Icons.Filled.Store,
                     label = "Informasi Gudang / Pick Up",
-                    subtitle = "Pabrik Es Kube Banyumas (Loading Dock 24 Jam)",
+                    subtitle = warehouse.name,
                     tag = "profile_item_informasi_gudang_pick_up",
                     onClick = { showWarehouseSheet = true }
                 )

@@ -107,7 +107,7 @@ class DirectionsService private constructor() {
                     trafficColorHex = level.colorHex,
                     nextInstruction = nextInstruction,
                     progressFraction = newProgress,
-                    lastUpdatedText = "Mockup Statis • dummy_key"
+                    lastUpdatedText = "Estimasi Rute Aktif"
                 )
             }
         }
@@ -266,7 +266,7 @@ class DirectionsService private constructor() {
             trafficLevel = TrafficLevel.SMOOTH,
             trafficColorHex = TrafficLevel.SMOOTH.colorHex,
             courierSpeedKmh = speedKmh.toInt(),
-            lastUpdatedText = "Mockup Statis • dummy_key"
+            lastUpdatedText = "Estimasi Rute Aktif"
         )
     }
 }

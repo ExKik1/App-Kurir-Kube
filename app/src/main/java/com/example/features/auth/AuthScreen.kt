@@ -7,9 +7,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,20 +32,27 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +60,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -62,11 +73,13 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.core.network.CourierSupabaseService
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeBlueDark
 import com.example.ui.theme.KubeSkyGradient
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
+import kotlinx.coroutines.launch
 
 @Composable
 fun AuthScreen(
@@ -82,99 +95,154 @@ fun AuthScreen(
     var confirmPasswordVisible by remember { mutableStateOf(false) }
     var rememberMe by remember { mutableStateOf(true) }
     var agreeToTerms by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
+    val density = LocalDensity.current
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val handleAuthSubmit: () -> Unit = {
+        if (!isLoading) {
+            coroutineScope.launch {
+                try {
+                    if (isSignUp && password != confirmPassword) {
+                        snackbarHostState.showSnackbar("Konfirmasi kata sandi tidak cocok.")
+                        return@launch
+                    }
+                    if (isSignUp && !agreeToTerms) {
+                        snackbarHostState.showSnackbar("Harap setujui Syarat & Ketentuan terlebih dahulu.")
+                        return@launch
+                    }
+                    isLoading = true
+                    val result = CourierSupabaseService.instance.loginCourier(
+                        email = email,
+                        password = password
+                    )
+                    isLoading = false
+                    result.fold(
+                        onSuccess = {
+                            onAuthSuccess()
+                        },
+                        onFailure = { error ->
+                            snackbarHostState.showSnackbar(
+                                error.message ?: "Gagal masuk ke akun kurir. Periksa kredensial Anda."
+                            )
+                        }
+                    )
+                } catch (e: Exception) {
+                    isLoading = false
+                    snackbarHostState.showSnackbar("Terjadi kendala saat autentikasi: ${e.message ?: "Coba lagi."}")
+                }
+            }
+        }
+    }
 
     // Explicit high-contrast text color (Colors.black87)
     val inputBlack87 = Color(0xDE000000)
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(KubeSkyGradient)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding()
             .testTag("auth_screen")
     ) {
+        val viewportHeight = maxHeight
+        var headerHeightDp by remember { mutableStateOf(0.dp) }
+        val minFormHeight = (viewportHeight - headerHeightDp).coerceAtLeast(0.dp)
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
         ) {
-            // Top Navigation & Official Logo Branding
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 14.dp)
-            ) {
-                // Circular Back Button
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.35f))
-                        .align(Alignment.CenterStart)
-                        .testTag("auth_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Kembali",
-                        tint = Color.White
-                    )
-                }
-
-                // Header Official Logo
-                Image(
-                    painter = painterResource(id = R.drawable.logo_kube),
-                    contentDescription = "Official Kube Logo",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .height(42.dp)
-                        .align(Alignment.Center)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Center Logo / Mascot Banner
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if (isSignUp) 130.dp else 115.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                if (isSignUp) {
-                    Image(
-                        painter = painterResource(id = R.drawable.kube_mascot_cooler),
-                        contentDescription = "Mascot Kube Cooler",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.height(125.dp)
-                    )
-                } else {
-                    // Official Logo Kube with BoxFit.contain
-                    Image(
-                        painter = painterResource(id = R.drawable.logo_kube),
-                        contentDescription = "Official Logo Kube",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .size(110.dp)
-                            .padding(4.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // White Form Container with Rounded Top Corners
+            // Header Area (Status bar padding + Back button + Single Center Logo)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(topStart = 36.dp, topEnd = 36.dp))
-                    .background(Color.White)
-                    .padding(horizontal = 24.dp, vertical = 28.dp)
+                    .onSizeChanged { size ->
+                        headerHeightDp = with(density) { size.height.toDp() }
+                    }
+                    .statusBarsPadding()
             ) {
+                // Top Navigation (Back Button only, clean minimal top bar)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 14.dp)
+                ) {
+                    // Circular Back Button
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.35f))
+                            .align(Alignment.CenterStart)
+                            .testTag("auth_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Kembali",
+                            tint = Color.White
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Single Main Center Logo: Official Kube Ice Cube with Soft Glow
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(125.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        // Soft glowing ambient circular background
+                        Box(
+                            modifier = Modifier
+                                .size(96.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF00B4DB).copy(alpha = 0.22f))
+                        )
+                        Image(
+                            painter = painterResource(id = R.drawable.logo_kube_cube),
+                            contentDescription = "Official Logo Kube Cube",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .size(92.dp)
+                                .padding(4.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+            }
+
+            // White Form Container: stretches all the way to the very bottom edge (zero blue gap)
+            // Rounded top corners ONLY (32.dp), flat bottom corners (0.dp)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = minFormHeight),
+                shape = RoundedCornerShape(
+                    topStart = 32.dp,
+                    topEnd = 32.dp,
+                    bottomStart = 0.dp,
+                    bottomEnd = 0.dp
+                ),
+                color = Color.White,
+                shadowElevation = 16.dp,
+                tonalElevation = 0.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(start = 24.dp, end = 24.dp, top = 28.dp, bottom = 32.dp)
+                ) {
                 // Segmented Tab Toggle [ Log In | Sign Up ]
                 Box(
                     modifier = Modifier
@@ -417,7 +485,11 @@ fun AuthScreen(
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = KubeTextMuted,
-                            modifier = Modifier.clickable { }
+                            modifier = Modifier.clickable {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Kata sandi dikelola Admin Kube. Hubungi Dispatcher untuk reset akses.")
+                                }
+                            }
                         )
                     }
                 }
@@ -426,7 +498,8 @@ fun AuthScreen(
 
                 // Primary Action Button (Gradient Cyan-Blue)
                 Button(
-                    onClick = onAuthSuccess,
+                    onClick = handleAuthSubmit,
+                    enabled = !isLoading,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(54.dp)
@@ -437,14 +510,24 @@ fun AuthScreen(
                         .testTag("auth_submit_button"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
-                        contentColor = Color.White
+                        contentColor = Color.White,
+                        disabledContainerColor = Color.Transparent,
+                        disabledContentColor = Color.White.copy(alpha = 0.8f)
                     )
                 ) {
-                    Text(
-                        text = if (isSignUp) "Sign Up" else "Log In",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            color = Color.White,
+                            strokeWidth = 2.4.dp
+                        )
+                    } else {
+                        Text(
+                            text = if (isSignUp) "Sign Up" else "Log In",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -465,49 +548,86 @@ fun AuthScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Google & Apple Buttons
+                // Google & Apple Buttons (OutlinedButton with grey.shade300 border and circular 30dp radius)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Box(
+                    // Google Button
+                    OutlinedButton(
+                        onClick = onAuthSuccess,
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .border(1.dp, Color(0xFFCFD8DC), RoundedCornerShape(24.dp))
-                            .clickable(onClick = onAuthSuccess),
-                        contentAlignment = Alignment.Center
+                            .height(52.dp)
+                            .testTag("google_auth_button"),
+                        shape = RoundedCornerShape(30.dp),
+                        border = BorderStroke(1.dp, Color(0xFFE0E0E0)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color.White,
+                            contentColor = KubeTextDark
+                        )
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = "G", fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFEA4335))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_google_logo),
+                                contentDescription = "Google Logo",
+                                modifier = Modifier.size(20.dp)
+                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(text = "Google", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = KubeTextDark)
+                            Text(
+                                text = "Google",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = KubeTextDark
+                            )
                         }
                     }
 
-                    Box(
+                    // Apple Button
+                    OutlinedButton(
+                        onClick = onAuthSuccess,
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .border(1.dp, Color(0xFFCFD8DC), RoundedCornerShape(24.dp))
-                            .clickable(onClick = onAuthSuccess),
-                        contentAlignment = Alignment.Center
+                            .height(52.dp)
+                            .testTag("apple_auth_button"),
+                        shape = RoundedCornerShape(30.dp),
+                        border = BorderStroke(1.dp, Color(0xFFE0E0E0)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color.White,
+                            contentColor = KubeTextDark
+                        )
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = "", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "Apple", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = KubeTextDark)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_apple_logo),
+                                contentDescription = "Apple Logo",
+                                tint = Color.Black,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Apple",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = KubeTextDark
+                            )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(22.dp))
 
-                // Bottom switch prompt
+                // Bottom switch prompt with safe bottom spacing above system navigation bar
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -526,5 +646,15 @@ fun AuthScreen(
                 }
             }
         }
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(16.dp)
+        )
     }
 }
+

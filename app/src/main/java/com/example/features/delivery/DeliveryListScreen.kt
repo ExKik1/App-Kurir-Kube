@@ -60,6 +60,7 @@ import com.example.core.components.StatusBadge
 import com.example.core.components.TopCourierBar
 import com.example.core.model.DeliveryOrder
 import com.example.core.model.DeliveryStatus
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeTextDark
@@ -86,8 +87,12 @@ fun DeliveryListScreen(
     onSelectOrder: (orderId: String) -> Unit,
     onNavigateToProfile: () -> Unit
 ) {
-    val orders by repository.orders.collectAsState()
-    val courier by repository.courier.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialOrders = remember(repository) { repository.orders.value }
+    val initialCourier = remember(repository) { repository.courier.value }
+
+    val orders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
     val context = LocalContext.current
 
     // Initialize filter tab based on initial filter if provided

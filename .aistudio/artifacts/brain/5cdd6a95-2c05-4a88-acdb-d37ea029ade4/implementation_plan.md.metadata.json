@@ -1,6 +1,0 @@
-{
-  "summary":  "Comprehensive revision plan for Kube architecture and UI: MainWrapper Scaffold with persistent bottomNavigationBar and IndexedStack state retention across 5 tabs, swipeable 3-slide PageView onboarding with dot indicators, keyboard-safe scrollable Auth layout, and centered Splash Screen.",
-  "updatedAt":  "2026-11-01T20:54:32.195654015Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

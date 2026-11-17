@@ -596,8 +596,11 @@ class OrderRepository {
     }
 
     /**
-     * Submits Proof of Delivery (PoD) and sets order status to PENDING_VERIFICATION.
-     * The order does not immediately become DELIVERED until admin verifies the report.
+     * ATURAN 3: Rombak Logika Tombol Submit PoD
+     * Saat kurir menekan tombol 'Submit' pada form Proof of Delivery, status pesanan
+     * langsung diubah menjadi 'DELIVERED' (Terkirim / Selesai) tanpa perlu verifikasi admin.
+     * Mengisi waktu deliveredTime, memindahkan pesanan ke riwayat selesai, dan
+     * mencatat komisi pengiriman otomatis ke Saldo Tertunda hingga diverifikasi Admin di web.
      */
     fun submitProofOfDelivery(
         orderId: String,
@@ -606,6 +609,8 @@ class OrderRepository {
         confirmedQuantity: Int,
         notes: String?
     ) {
+        val existingOrder = _orders.value.find { it.id == orderId }
+        val wasAlreadyDelivered = existingOrder?.status == DeliveryStatus.DELIVERED
         val currentTime = "10:15 | 28 Okt 2026"
         val pod = com.example.core.model.ProofOfDelivery(
             recipientName = recipientName.trim(),
@@ -618,12 +623,36 @@ class OrderRepository {
             currentList.map { order ->
                 if (order.id == orderId) {
                     order.copy(
-                        status = DeliveryStatus.PENDING_VERIFICATION,
+                        status = DeliveryStatus.DELIVERED,
+                        deliveredTime = currentTime,
                         proofOfDelivery = pod
                     )
                 } else order
             }
         }
+
+        if (!wasAlreadyDelivered && existingOrder != null) {
+            val earnedCommission = (confirmedQuantity.coerceAtLeast(1) * 5000L)
+            val formattedAmount = "Rp ${"%,d".format(earnedCommission).replace(',', '.')}"
+            val newPending = _walletBalance.value.pendingBalance + earnedCommission
+            _walletBalance.update {
+                it.copy(pendingBalance = newPending)
+            }
+            _courier.update {
+                it.copy(pendingBalance = newPending)
+            }
+            val newCommissionItem = CommissionHistoryItem(
+                id = "COM-${System.currentTimeMillis()}",
+                orderId = orderId,
+                title = "Komisi $confirmedQuantity unit es - $formattedAmount (Tertunda)",
+                subtitle = "${existingOrder.customerName} · Hari Ini, 10:15",
+                amount = earnedCommission,
+                isTip = false,
+                timestamp = "Hari Ini, 10:15"
+            )
+            _commissionHistory.update { listOf(newCommissionItem) + it }
+        }
+
         dailyStatsProvider.updateFromOrders(_orders.value)
         recalculateCourierStats()
     }
@@ -670,6 +699,141 @@ class OrderRepository {
                 phone = phone.trim(),
                 address = address.trim()
             )
+        }
+    }
+
+    /**
+     * Sinkronisasi state pesanan dari Supabase Realtime Stream (`deliveries`) setelah join hydration.
+     * Menjaga konsistensi `DailyStatsProvider` dan metrik dashboard secara real-time.
+     */
+    fun syncOrdersFromStream(remoteOrders: List<DeliveryOrder>) {
+        if (remoteOrders.isEmpty()) return
+        _orders.update { current ->
+            val currentById = current.associateBy { it.id }
+            val mergedRemote = remoteOrders.map { remote ->
+                val existing = currentById[remote.id]
+                if (existing != null) {
+                    remote.copy(
+                        customerName = remote.customerName.ifBlank { existing.customerName },
+                        address = remote.address.ifBlank { existing.address },
+                        subDistrict = remote.subDistrict.ifBlank { existing.subDistrict },
+                        phoneNumber = remote.phoneNumber.ifBlank { existing.phoneNumber },
+                        itemDescription = remote.itemDescription.ifBlank { existing.itemDescription },
+                        proofOfDelivery = remote.proofOfDelivery ?: existing.proofOfDelivery
+                    )
+                } else {
+                    remote
+                }
+            }
+            val remoteIds = mergedRemote.mapTo(HashSet()) { it.id }
+            val remainingLocal = current.filterNot { it.id in remoteIds }
+            mergedRemote + remainingLocal
+        }
+        dailyStatsProvider.updateFromOrders(_orders.value)
+        recalculateCourierStats()
+    }
+
+    /**
+     * Sinkronisasi profil kurir real-time dari tabel `courier_profiles` / `couriers`.
+     */
+    fun syncCourierFromStream(remoteCourier: Courier) {
+        _courier.update { current ->
+            current.copy(
+                id = remoteCourier.id.ifBlank { current.id },
+                name = remoteCourier.name.ifBlank { current.name },
+                email = remoteCourier.email.ifBlank { current.email },
+                phone = remoteCourier.phone.ifBlank { current.phone },
+                address = remoteCourier.address.ifBlank { current.address },
+                isActiveDuty = remoteCourier.isActiveDuty,
+                statusText = if (remoteCourier.isActiveDuty) "Selamat Bertugas" else "Sedang Istirahat",
+                bankAccountNumber = remoteCourier.bankAccountNumber.ifBlank { current.bankAccountNumber },
+                bankName = remoteCourier.bankName.ifBlank { current.bankName },
+                bankAccountHolder = remoteCourier.bankAccountHolder.ifBlank { current.bankAccountHolder },
+                vehicleType = remoteCourier.vehicleType.ifBlank { current.vehicleType },
+                vehiclePlateNumber = remoteCourier.vehiclePlateNumber.ifBlank { current.vehiclePlateNumber },
+                vehicleCapacity = remoteCourier.vehicleCapacity.ifBlank { current.vehicleCapacity },
+                vehicleStatus = remoteCourier.vehicleStatus.ifBlank { current.vehicleStatus }
+            )
+        }
+    }
+
+    /**
+     * Sinkronisasi ringkasan saldo real-time dari tabel `wallets` Supabase.
+     */
+    fun syncWalletBalanceFromStream(remoteWallet: WalletBalance) {
+        _walletBalance.value = remoteWallet
+        _courier.update { current ->
+            current.copy(
+                balance = remoteWallet.availableBalance,
+                pendingBalance = remoteWallet.pendingBalance,
+                withdrawnBalance = remoteWallet.withdrawnBalance
+            )
+        }
+    }
+
+    /**
+     * Sinkronisasi riwayat transaksi komisi/tip dari stream tabel `wallet_transactions`.
+     */
+    fun syncCommissionHistoryFromStream(remoteCommissions: List<CommissionHistoryItem>) {
+        if (remoteCommissions.isEmpty()) return
+        _commissionHistory.update { current ->
+            val remoteIds = remoteCommissions.mapTo(HashSet()) { it.id }
+            remoteCommissions + current.filterNot { it.id in remoteIds }
+        }
+    }
+
+    /**
+     * Sinkronisasi real-time tabel `withdrawals` dari Web Admin ke state lokal.
+     * Menangani transisi status otomatis:
+     * - WAITING / PROCESSING -> SUCCESS: Saldo Tertunda dipindahkan ke Saldo Dicairkan
+     * - WAITING / PROCESSING -> REJECTED: Saldo Tertunda dikembalikan ke Saldo Tersedia + tampil alasan penolakan
+     */
+    fun syncWithdrawalsFromStream(remoteWithdrawals: List<WithdrawalHistoryItem>) {
+        if (remoteWithdrawals.isEmpty()) return
+
+        var pendingDelta = 0L
+        var availableDelta = 0L
+        var withdrawnDelta = 0L
+
+        _withdrawalHistory.update { currentList ->
+            val currentById = currentList.associateBy { it.id }
+            val updatedRemote = remoteWithdrawals.map { remote ->
+                val prev = currentById[remote.id]
+                if (prev != null && (prev.status == WithdrawalStatus.WAITING || prev.status == WithdrawalStatus.PROCESSING)) {
+                    when (remote.status) {
+                        WithdrawalStatus.SUCCESS -> {
+                            pendingDelta -= remote.amount
+                            withdrawnDelta += remote.amount
+                        }
+                        WithdrawalStatus.REJECTED -> {
+                            pendingDelta -= remote.amount
+                            availableDelta += remote.amount
+                        }
+                        else -> {}
+                    }
+                }
+                remote
+            }
+            val remoteIds = updatedRemote.mapTo(HashSet()) { it.id }
+            updatedRemote + currentList.filterNot { it.id in remoteIds }
+        }
+
+        if (pendingDelta != 0L || availableDelta != 0L || withdrawnDelta != 0L) {
+            _walletBalance.update { w ->
+                w.copy(
+                    pendingBalance = (w.pendingBalance + pendingDelta).coerceAtLeast(0L),
+                    availableBalance = (w.availableBalance + availableDelta).coerceAtLeast(0L),
+                    withdrawnBalance = (w.withdrawnBalance + withdrawnDelta).coerceAtLeast(0L)
+                )
+            }
+            val updatedWallet = _walletBalance.value
+            _courier.update { c ->
+                c.copy(
+                    balance = updatedWallet.availableBalance,
+                    pendingBalance = updatedWallet.pendingBalance,
+                    withdrawnBalance = updatedWallet.withdrawnBalance
+                )
+            }
         }
     }
 

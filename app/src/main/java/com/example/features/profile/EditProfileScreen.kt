@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.core.components.LiquidGlassBackground
 import com.example.core.components.LiquidGlassCard
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeTextDark
@@ -84,7 +85,9 @@ fun EditProfileScreen(
 ) {
     BackHandler { onBack() }
 
-    val courier by repository.courier.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialCourier = remember(repository) { repository.courier.value }
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -392,9 +395,13 @@ fun EditProfileScreen(
                         // Tombol Simpan Perubahan
                         Button(
                             onClick = {
-                                repository.updateCourierProfile(phoneInput, addressInput)
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Profil berhasil diperbarui!")
+                                    supabaseService.updateCourierProfile(
+                                        courierId = courier.id,
+                                        phone = phoneInput,
+                                        address = addressInput
+                                    )
+                                    snackbarHostState.showSnackbar("Profil berhasil diperbarui & disinkronkan!")
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright),

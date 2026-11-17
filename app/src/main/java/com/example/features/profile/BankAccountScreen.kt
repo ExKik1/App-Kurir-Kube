@@ -55,6 +55,7 @@ import com.example.core.components.LiquidDarkGlassCard
 import com.example.core.components.LiquidGlassBackground
 import com.example.core.components.LiquidGlassCard
 import com.example.core.model.maskAccountNumber
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeCyan
@@ -76,7 +77,9 @@ fun BankAccountScreen(
 ) {
     BackHandler { onBack() }
 
-    val courier by repository.courier.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialCourier = remember(repository) { repository.courier.value }
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     var showConfirmationDialog by remember { mutableStateOf(false) }

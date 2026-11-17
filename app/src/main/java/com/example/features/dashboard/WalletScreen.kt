@@ -75,6 +75,7 @@ import com.example.core.model.CommissionHistoryItem
 import com.example.core.model.WithdrawalHistoryItem
 import com.example.core.model.WithdrawalStatus
 import com.example.core.model.maskAccountNumber
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeCyan
@@ -88,10 +89,16 @@ fun WalletScreen(
     repository: OrderRepository = OrderRepository.instance,
     onNavigateToProfile: () -> Unit = {}
 ) {
-    val courier by repository.courier.collectAsState()
-    val walletBalance by repository.walletBalance.collectAsState()
-    val commissionList by repository.commissionHistory.collectAsState()
-    val withdrawalList by repository.withdrawalHistory.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialCourier = remember(repository) { repository.courier.value }
+    val initialWallet = remember(repository) { repository.walletBalance.value }
+    val initialCommissions = remember(repository) { repository.commissionHistory.value }
+    val initialWithdrawals = remember(repository) { repository.withdrawalHistory.value }
+
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val walletBalance by supabaseService.streamWalletSummary().collectAsState(initial = initialWallet)
+    val commissionList by supabaseService.streamWalletTransactions().collectAsState(initial = initialCommissions)
+    val withdrawalList by supabaseService.streamWithdrawals().collectAsState(initial = initialWithdrawals)
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Riwayat Komisi, 1: Riwayat Pencairan
     var showEditAccountDialog by remember { mutableStateOf(false) }
@@ -552,13 +559,27 @@ fun WalletScreen(
                 accountHolder = courier.bankAccountHolder,
                 onDismiss = { showWithdrawDialog = false },
                 onConfirmWithdraw = { amount ->
-                    val result = repository.requestWithdrawal(amount)
+                    val result = try {
+                        CourierSupabaseService.instance.requestWithdrawal(
+                            courierId = courier.id,
+                            amount = amount,
+                            bankAccount = courier.bankAccountNumber
+                        )
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
                     if (result.isSuccess) {
                         showWithdrawDialog = false
                         selectedTab = 1 // Switch to Riwayat Pencairan to show new status
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar(
                                 "Pengajuan penarikan dana berhasil dikirim. Admin akan memproses transfer Anda segera."
+                            )
+                        }
+                    } else {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(
+                                result.exceptionOrNull()?.message ?: "Gagal mengirim pengajuan penarikan dana."
                             )
                         }
                     }

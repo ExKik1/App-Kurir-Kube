@@ -671,28 +671,29 @@ fun ProofOfDeliveryBottomSheet(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Info Notice: Submission logic
+            // Info Notice: Direct completion logic
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFFFF8E1),
-                border = BorderStroke(1.dp, Color(0xFFFFD54F))
+                color = Color(0xFFE8F5E9),
+                border = BorderStroke(1.dp, Color(0xFFA5D6A7))
             ) {
                 Row(
                     modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.Top
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Warning,
+                        imageVector = Icons.Default.CheckCircle,
                         contentDescription = null,
-                        tint = Color(0xFFF57C00),
+                        tint = Color(0xFF2E7D32),
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Status pesanan akan diubah menjadi 'Menunggu Verifikasi Admin' dan akan diperiksa oleh sistem Kube sebelum status diselesaikan.",
+                        text = "Pesanan akan langsung diselesaikan dan otomatis masuk ke tab Riwayat / Selesai.",
                         fontSize = 11.sp,
-                        color = Color(0xFFE65100),
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF1B5E20),
                         lineHeight = 15.sp
                     )
                 }
@@ -700,7 +701,7 @@ fun ProofOfDeliveryBottomSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // 5. TOMBOL SUBMIT: 'Kirim Laporan'
+            // 5. TOMBOL SUBMIT: 'Selesaikan & Kirim PoD'
             Button(
                 onClick = {
                     hasAttemptedSubmit = true
@@ -719,18 +720,18 @@ fun ProofOfDeliveryBottomSheet(
                     .testTag("submit_pod_button"),
                 shape = RoundedCornerShape(26.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF0096C7),
+                    containerColor = Color(0xFF2E7D32), // Green completion color
                     contentColor = Color.White
                 )
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Kirim Laporan PoD",
+                    text = "Selesaikan Pengiriman",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )

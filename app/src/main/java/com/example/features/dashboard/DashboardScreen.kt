@@ -1,6 +1,13 @@
 package com.example.features.dashboard
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,11 +32,18 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AssignmentReturn
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.LocalShipping
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.PriorityHigh
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,6 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -52,6 +68,7 @@ import com.example.core.components.LiquidGlassBackground
 import com.example.core.components.LiquidGlassCard
 import com.example.core.components.TopCourierBar
 import com.example.core.model.DeliveryStatus
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.DailyStatsProvider
 import com.example.core.repository.DailyStatsState
 import com.example.core.repository.OrderRepository
@@ -66,9 +83,16 @@ fun DashboardScreen(
     onNavigateToDelivery: (filterStatus: DeliveryStatus?) -> Unit,
     onNavigateToProfile: () -> Unit
 ) {
-    val courier by repository.courier.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialCourier = remember(repository) { repository.courier.value }
+    val initialOrders = remember(repository) { repository.orders.value }
+    val initialWallet = remember(repository) { repository.walletBalance.value }
+
+    val courier by supabaseService.streamCourierProfile().collectAsState(initial = initialCourier)
+    val orders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
+    val walletBalance by supabaseService.streamWalletSummary().collectAsState(initial = initialWallet)
     // Single Source of Truth for all dashboard metrics: DailyStatsProvider
-    val dailyStats by repository.dailyStats.collectAsState()
+    val dailyStats = remember(orders) { supabaseService.calculateTodaySummary(orders) }
 
     var showBalanceDialog by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
@@ -82,7 +106,7 @@ fun DashboardScreen(
                     Text("Saldo Siap Cair:", fontSize = 14.sp, color = Color.Gray)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "Rp ${"%,d".format(courier.balance).replace(',', '.')}",
+                        "Rp ${"%,d".format(walletBalance.availableBalance).replace(',', '.')}",
                         fontSize = 26.sp,
                         fontWeight = FontWeight.Bold,
                         color = KubeBlueBright
@@ -128,9 +152,19 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Check Balance Frosted Liquid Glass Banner
+            // SEKSI 1 (Paling Atas - Prioritas Utama): Actionable priority alert card
+            PriorityActionSection(
+                orders = orders,
+                dailyStats = dailyStats,
+                onNavigateToDelivery = onNavigateToDelivery
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // SEKSI 2: Interactive Glassmorphism Balance Card with Hidden/Visible Toggle & Glowing Halo
             CheckBalanceGlassBanner(
-                onClick = { showBalanceDialog = true }
+                balance = walletBalance.availableBalance,
+                onViewDetails = { showBalanceDialog = true }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -243,61 +277,162 @@ fun DashboardScreen(
     }
 }
 
+/**
+ * ATURAN 2: Rombak Fitur 'Check Balance' Menjadi Interaktif
+ * - Card saldo bergaya Glassmorphism premium
+ * - Nilai tersembunyi secara default: "Rp *******"
+ * - Ikon mata (Icons.Filled.Visibility / VisibilityOff)
+ * - Di-klik memunculkan saldo asli dengan animasi fade / slide halus
+ * - Efek glow (bayangan cahaya biru tipis) di sekitar card
+ */
 @Composable
-private fun CheckBalanceGlassBanner(onClick: () -> Unit) {
-    LiquidGlassCard(
+private fun CheckBalanceGlassBanner(
+    balance: Long,
+    onViewDetails: () -> Unit
+) {
+    var isBalanceVisible by remember { mutableStateOf(false) }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp)
-            .testTag("check_balance_card"),
-        shape = RoundedCornerShape(26.dp),
-        elevation = 6.dp,
-        fillAlphaTop = 0.50f,
-        fillAlphaBottom = 0.25f,
-        borderAlphaTop = 0.90f,
-        borderAlphaBottom = 0.35f,
-        onClick = onClick
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Wallet Icon in white frosted circle
-                Box(
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.75f))
-                        .border(1.dp, Color.White, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.AccountBalanceWallet,
-                        contentDescription = "Wallet",
-                        tint = Color(0xFF0F3657),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(14.dp))
-
-                Text(
-                    text = "Check Balance",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = KubeTextDark
+        // Efek Glow (bayangan cahaya biru lembut di belakang card)
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .padding(4.dp)
+                .clip(RoundedCornerShape(26.dp))
+                .background(Color(0xFF00B4DB).copy(alpha = 0.22f))
+                .border(
+                    BorderStroke(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.40f)),
+                    RoundedCornerShape(26.dp)
                 )
-            }
+        )
 
-            Text(
-                text = ">>>",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = KubeBlueBright,
-                modifier = Modifier.padding(end = 4.dp)
-            )
+        LiquidGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { isBalanceVisible = !isBalanceVisible }
+                .testTag("check_balance_card"),
+            shape = RoundedCornerShape(26.dp),
+            elevation = 6.dp,
+            fillAlphaTop = 0.60f,
+            fillAlphaBottom = 0.32f,
+            borderAlphaTop = 0.95f,
+            borderAlphaBottom = 0.45f
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateContentSize()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Frosted wallet icon in glass circle
+                        Box(
+                            modifier = Modifier
+                                .size(46.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.85f))
+                                .border(1.dp, Color.White, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.AccountBalanceWallet,
+                                contentDescription = "Wallet",
+                                tint = Color(0xFF0288D1),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(14.dp))
+
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Saldo Siap Cair",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFF5E7E94)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = if (isBalanceVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                    contentDescription = if (isBalanceVisible) "Sembunyikan Saldo" else "Tampilkan Saldo",
+                                    tint = KubeBlueBright,
+                                    modifier = Modifier
+                                        .size(17.dp)
+                                        .clickable { isBalanceVisible = !isBalanceVisible }
+                                        .testTag("toggle_balance_visibility")
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            // AnimatedSwitcher equivalent: smooth crossfade between Rp ******* and real balance
+                            AnimatedContent(
+                                targetState = isBalanceVisible,
+                                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                                label = "balance_visibility_switcher"
+                            ) { visible ->
+                                if (visible) {
+                                    Text(
+                                        text = "Rp ${"%,d".format(balance).replace(',', '.')}",
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF0F3657),
+                                        modifier = Modifier.testTag("visible_balance_text")
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Rp *******",
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF0F3657),
+                                        modifier = Modifier.testTag("hidden_balance_mask")
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Action pill to open details
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF00B4DB).copy(alpha = 0.15f))
+                            .border(
+                                BorderStroke(1.dp, Color(0xFF00B4DB).copy(alpha = 0.40f)),
+                                RoundedCornerShape(14.dp)
+                            )
+                            .clickable(onClick = onViewDetails)
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("btn_view_balance_details")
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Rincian",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = KubeBlueBright
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                contentDescription = null,
+                                tint = KubeBlueBright,
+                                modifier = Modifier.size(10.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -506,177 +641,503 @@ private fun JobdeskReturnActionCard(
  * Penjumlahan akurat secara matematis:
  * Total = Selesai + Diantar + Menunggu + Retur (12 + 5 + 3 + 0 = 20)
  */
+/**
+ * ATURAN 3: Upgrade UI 'Performa Pengiriman'
+ * - Latar belakang gelap semi-transparan (GlassContainer warna biru navy/midnight blue dengan blur & border specular)
+ * - Animasi Circular Progress Indicator berdesain modern (rounded caps, gradasi warna cyan ke biru)
+ * - Tipografi angka (12 Selesai, 5 Diantar, 3 Menunggu) menonjol (FontWeight.Bold)
+ * - Aksen warna hijau terang (#00E676) untuk 'Selesai' dan kuning terang (#FFD600) untuk 'Diantar' agar UI terasa lebih 'hidup' dan informatif.
+ */
 @Composable
 private fun PerformanceGlassCard(
     dailyStats: DailyStatsState,
     modifier: Modifier = Modifier
 ) {
-    LiquidDarkGlassCard(
-        modifier = modifier.testTag("performance_card"),
+    val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = dailyStats.progressFraction.coerceIn(0f, 1f),
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 1000,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
+        label = "circular_performance_progress"
+    )
+
+    // Midnight Blue / Deep Navy Glass Card with Specular Border & Ambient Cyan Sheen
+    Surface(
+        modifier = modifier
+            .shadow(
+                elevation = 12.dp,
+                shape = RoundedCornerShape(26.dp),
+                ambientColor = Color(0x6600B4DB),
+                spotColor = Color(0x4400E5FF),
+                clip = false
+            )
+            .clip(RoundedCornerShape(26.dp))
+            .border(
+                BorderStroke(
+                    1.2.dp,
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        colors = listOf(
+                            Color(0xFF00E5FF).copy(alpha = 0.65f),
+                            Color.White.copy(alpha = 0.25f),
+                            Color(0xFF0083B0).copy(alpha = 0.45f)
+                        )
+                    )
+                ),
+                RoundedCornerShape(26.dp)
+            )
+            .testTag("performance_card"),
         shape = RoundedCornerShape(26.dp),
-        elevation = 8.dp
+        color = Color.Transparent
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Performa Pengiriman",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
+        Box(
+            modifier = Modifier
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF071B2F).copy(alpha = 0.94f), // Deep Midnight Navy
+                            Color(0xFF030D18).copy(alpha = 0.97f)
+                        )
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Rekapitulasi Historis • ${dailyStats.periodLabel}",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = KubeCyan
-                    )
+                )
+                .padding(20.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Header Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF00E676)) // Bright Green live indicator
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Performa Pengiriman",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "Rekapitulasi Historis • ${dailyStats.periodLabel}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF80DEEA)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF00B4DB).copy(alpha = 0.18f))
+                            .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.35f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.TrendingUp,
+                            contentDescription = "Grafik Performa",
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
 
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.TrendingUp,
-                    contentDescription = "Grafik Performa",
-                    tint = KubeCyan,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+                Spacer(modifier = Modifier.height(18.dp))
 
-            Spacer(modifier = Modifier.height(14.dp))
+                // Center Display: Modern Circular Progress Gauge & Headline Metrics
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Modern Animated Circular Progress Gauge
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(105.dp)
+                    ) {
+                        Canvas(modifier = Modifier.size(96.dp)) {
+                            val strokeWidth = 10.dp.toPx()
+                            val radius = (size.minDimension - strokeWidth) / 2
+                            val center = Offset(size.width / 2, size.height / 2)
 
-            // Stat Headline: e.g. "12/20 Selesai" with Percentage Badge
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Bottom
-            ) {
-                Text(
-                    text = "${dailyStats.completedOrders}/${dailyStats.totalOrders} Selesai",
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color.White
-                )
+                            // Track Circle (Dark Navy Translucent)
+                            drawCircle(
+                                color = Color.White.copy(alpha = 0.12f),
+                                radius = radius,
+                                center = center,
+                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                    width = strokeWidth
+                                )
+                            )
 
-                // Percentage Badge
-                val percentage = (dailyStats.progressFraction * 100).toInt()
+                            // Glowing Progress Arc with Rounded Caps & Cyan-to-Blue Gradient
+                            val sweepAngle = animatedProgress * 360f
+                            if (sweepAngle > 0f) {
+                                drawArc(
+                                    brush = androidx.compose.ui.graphics.Brush.sweepGradient(
+                                        colors = listOf(
+                                            Color(0xFF00E5FF), // Electric Cyan
+                                            Color(0xFF00B4DB),
+                                            Color(0xFF0288D1),
+                                            Color(0xFF00E5FF)
+                                        )
+                                    ),
+                                    startAngle = -90f,
+                                    sweepAngle = sweepAngle,
+                                    useCenter = false,
+                                    topLeft = Offset(center.x - radius, center.y - radius),
+                                    size = androidx.compose.ui.geometry.Size(radius * 2, radius * 2),
+                                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                        width = strokeWidth,
+                                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                    )
+                                )
+                            }
+                        }
+
+                        // Inside Ring Metric
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            val percentage = (animatedProgress * 100).toInt()
+                            Text(
+                                text = "$percentage%",
+                                fontSize = 21.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Tercapai",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00E5FF)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    // Primary Delivery Progress Details
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${dailyStats.completedOrders}",
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color(0xFF00E676) // Bright Vibrant Green
+                            )
+                            Text(
+                                text = "/${dailyStats.totalOrders}",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White.copy(alpha = 0.85f)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Selesai",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00E676)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color.White.copy(alpha = 0.08f))
+                                .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Text(
+                                text = "${dailyStats.totalOrders - dailyStats.completedOrders} pesanan tersisa hari ini",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFB0BEC5)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Formula Check Badge (Akurasi Matematis)
                 Box(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .background(KubeCyan.copy(alpha = 0.20f))
-                        .border(BorderStroke(1.dp, KubeCyan.copy(alpha = 0.50f)), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                        .background(Color(0xFF021727).copy(alpha = 0.70f))
+                        .border(
+                            BorderStroke(0.8.dp, Color(0xFF00E5FF).copy(alpha = 0.25f)),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 7.dp)
                 ) {
                     Text(
-                        text = "$percentage% Tercapai",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = KubeCyan
+                        text = "Total ${dailyStats.totalOrders} = ${dailyStats.completedOrders} Selesai + ${dailyStats.inDeliveryOrders} Diantar + ${dailyStats.newTasksOrders} Menunggu${if (dailyStats.failedReturnOrders > 0) " + ${dailyStats.failedReturnOrders} Retur" else ""}",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White.copy(alpha = 0.90f)
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-            // Progress Bar
-            LinearProgressIndicator(
-                progress = { dailyStats.progressFraction.coerceIn(0f, 1f) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                color = KubeCyan,
-                trackColor = Color.White.copy(alpha = 0.15f)
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Penjelasan Matematis Akurat (Formula Check)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.08f))
-                    .border(BorderStroke(0.6.dp, Color.White.copy(alpha = 0.15f)), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "Total ${dailyStats.totalOrders} pesanan = ${dailyStats.completedOrders} Selesai + ${dailyStats.inDeliveryOrders} Diantar + ${dailyStats.newTasksOrders} Menunggu${if (dailyStats.failedReturnOrders > 0) " + ${dailyStats.failedReturnOrders} Retur" else ""}",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White.copy(alpha = 0.85f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // 4 Sub-pills Rekapitulasi Sinkron dengan Jobdesk:
-            // Selesai (12) + Diantar (5) + Menunggu (3) + Retur (0)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                PerformanceMetricGlassPill(
-                    number = "${dailyStats.completedOrders}",
-                    label = "Selesai",
-                    accentColor = KubeCyan,
-                    modifier = Modifier.weight(1f)
-                )
-                PerformanceMetricGlassPill(
-                    number = "${dailyStats.inDeliveryOrders}",
-                    label = "Diantar",
-                    accentColor = Color(0xFF64B5F6),
-                    modifier = Modifier.weight(1f)
-                )
-                PerformanceMetricGlassPill(
-                    number = "${dailyStats.newTasksOrders}",
-                    label = "Menunggu",
-                    accentColor = Color(0xFFFFB74D),
-                    modifier = Modifier.weight(1f)
-                )
-                PerformanceMetricGlassPill(
-                    number = "${dailyStats.failedReturnOrders}",
-                    label = "Retur",
-                    accentColor = if (dailyStats.failedReturnOrders > 0) Color(0xFFE57373) else Color.White.copy(alpha = 0.6f),
-                    modifier = Modifier.weight(1f)
-                )
+                // 4 Futuristic Sub-pills with vibrant colored typography:
+                // Selesai (Hijau Terang #00E676), Diantar (Kuning Terang #FFD600), Menunggu (Orange #FF9800), Retur (Merah muda)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FuturisticMetricPill(
+                        number = "${dailyStats.completedOrders}",
+                        label = "Selesai",
+                        accentColor = Color(0xFF00E676), // Bright Green
+                        bgColor = Color(0xFF00E676).copy(alpha = 0.12f),
+                        borderColor = Color(0xFF00E676).copy(alpha = 0.40f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FuturisticMetricPill(
+                        number = "${dailyStats.inDeliveryOrders}",
+                        label = "Diantar",
+                        accentColor = Color(0xFFFFD600), // Vibrant Yellow
+                        bgColor = Color(0xFFFFD600).copy(alpha = 0.12f),
+                        borderColor = Color(0xFFFFD600).copy(alpha = 0.40f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FuturisticMetricPill(
+                        number = "${dailyStats.newTasksOrders}",
+                        label = "Menunggu",
+                        accentColor = Color(0xFFFF9100), // Vibrant Orange
+                        bgColor = Color(0xFFFF9100).copy(alpha = 0.12f),
+                        borderColor = Color(0xFFFF9100).copy(alpha = 0.35f),
+                        modifier = Modifier.weight(1f)
+                    )
+                    FuturisticMetricPill(
+                        number = "${dailyStats.failedReturnOrders}",
+                        label = "Retur",
+                        accentColor = if (dailyStats.failedReturnOrders > 0) Color(0xFFFF5252) else Color.White.copy(alpha = 0.55f),
+                        bgColor = if (dailyStats.failedReturnOrders > 0) Color(0xFFFF5252).copy(alpha = 0.15f) else Color.White.copy(alpha = 0.06f),
+                        borderColor = if (dailyStats.failedReturnOrders > 0) Color(0xFFFF5252).copy(alpha = 0.45f) else Color.White.copy(alpha = 0.14f),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun PerformanceMetricGlassPill(
+private fun FuturisticMetricPill(
     number: String,
     label: String,
-    accentColor: Color = Color.White,
+    accentColor: Color,
+    bgColor: Color,
+    borderColor: Color,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
-            .background(Color.White.copy(alpha = 0.10f))
-            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)), RoundedCornerShape(16.dp))
+            .background(bgColor)
+            .border(BorderStroke(1.2.dp, borderColor), RoundedCornerShape(16.dp))
             .padding(vertical = 10.dp, horizontal = 4.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = number,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.ExtraBold,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Black,
                 color = accentColor
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = label,
                 fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = Color.White.copy(alpha = 0.75f)
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.88f)
             )
         }
     }
 }
+
+/**
+ * SEKSI 1 (Paling Atas - Prioritas Utama):
+ * Kartu peringatan actionable yang bisa diketuk untuk menindaklanjuti
+ * kendala pengiriman (retur), tenggat waktu mendesak, atau tugas menunggu konfirmasi.
+ */
+@Composable
+private fun PriorityActionSection(
+    orders: List<com.example.core.model.DeliveryOrder>,
+    dailyStats: DailyStatsState,
+    onNavigateToDelivery: (DeliveryStatus?) -> Unit
+) {
+    val urgentOrder = remember(orders) {
+        orders.firstOrNull {
+            !it.isRiwayat && (it.priority.contains("Tinggi", ignoreCase = true) ||
+                it.priority.contains("Mendesak", ignoreCase = true))
+        }
+    }
+    val hasIssue = dailyStats.failedReturnOrders > 0
+    val hasPendingConfirm = dailyStats.newTasksOrders > 0
+
+    val targetFilter: DeliveryStatus?
+    val badgeText: String
+    val headline: String
+    val subtitle: String
+    val accentColor: Color
+    val badgeBg: Color
+    val leadingIcon: ImageVector
+
+    when {
+        hasIssue -> {
+            targetFilter = DeliveryStatus.FAILED
+            badgeText = "KENDALA"
+            headline = "${dailyStats.failedReturnOrders} Pengiriman Gagal / Retur"
+            subtitle = "Segera konfirmasi pengembalian stok ke depo Kube"
+            accentColor = Color(0xFFDC2626)
+            badgeBg = Color(0xFFFEE2E2)
+            leadingIcon = Icons.Filled.PriorityHigh
+        }
+        urgentOrder != null -> {
+            targetFilter = urgentOrder.status
+            badgeText = "MENDESAK"
+            headline = "${urgentOrder.customerName} (${urgentOrder.id})"
+            subtitle = "${urgentOrder.itemDescription} • Est. ${urgentOrder.estimatedTimeMinutes} mnt • Ketuk untuk proses"
+            accentColor = Color(0xFFD97706)
+            badgeBg = Color(0xFFFEF3C7)
+            leadingIcon = Icons.Filled.Schedule
+        }
+        hasPendingConfirm -> {
+            targetFilter = DeliveryStatus.NEW
+            badgeText = "MENUNGGU"
+            headline = "${dailyStats.newTasksOrders} Tugas Baru Menunggu Konfirmasi"
+            subtitle = "Ketuk untuk melihat antrean pengambilan es di gudang"
+            accentColor = Color(0xFF0284C7)
+            badgeBg = Color(0xFFE0F2FE)
+            leadingIcon = Icons.Filled.NotificationsActive
+        }
+        else -> {
+            targetFilter = DeliveryStatus.IN_TRANSIT
+            badgeText = "AMAN"
+            headline = "Semua Prioritas Terkendali"
+            subtitle = "Tidak ada kendala mendesak. Lanjutkan pengantaran aktif Anda."
+            accentColor = Color(0xFF059669)
+            badgeBg = Color(0xFFD1FAE5)
+            leadingIcon = Icons.Filled.CheckCircle
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .testTag("section_prioritas_utama")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Prioritas Utama",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = KubeTextDark
+            )
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(badgeBg)
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Text(
+                    text = badgeText,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = accentColor
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        LiquidGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("priority_action_card"),
+            shape = RoundedCornerShape(22.dp),
+            elevation = 6.dp,
+            fillAlphaTop = 0.65f,
+            fillAlphaBottom = 0.35f,
+            borderAlphaTop = 0.95f,
+            borderAlphaBottom = 0.45f,
+            onClick = { onNavigateToDelivery(targetFilter) }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(badgeBg)
+                            .border(1.dp, accentColor.copy(alpha = 0.30f), RoundedCornerShape(14.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = leadingIcon,
+                            contentDescription = "Prioritas Utama",
+                            tint = accentColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column {
+                        Text(
+                            text = headline,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KubeTextDark
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = subtitle,
+                            fontSize = 12.sp,
+                            color = Color(0xFF5A738E),
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                    contentDescription = "Buka Prioritas",
+                    tint = accentColor,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+

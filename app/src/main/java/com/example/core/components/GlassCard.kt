@@ -11,7 +11,13 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.Surface
+import com.example.R
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -96,6 +102,17 @@ fun LiquidGlassBackground(
                 )
             )
         }
+
+        // Subtly blended background watermark logo (opacity ~0.065) positioned centered in background
+        Image(
+            painter = painterResource(id = R.drawable.logo_kube_cube),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            alpha = 0.065f,
+            modifier = Modifier
+                .size(380.dp)
+                .align(Alignment.Center)
+        )
 
         // Child composables (cards, lists, headers) sit directly on top of the liquid canvas
         content()

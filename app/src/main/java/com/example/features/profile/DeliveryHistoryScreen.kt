@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +52,7 @@ import com.example.core.components.LiquidGlassBackground
 import com.example.core.components.LiquidGlassCard
 import com.example.core.model.DeliveryOrder
 import com.example.core.model.DeliveryStatus
+import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeCyan
@@ -60,7 +62,7 @@ import com.example.ui.theme.KubeTextMuted
 /**
  * Screen untuk Riwayat Pengiriman Kurir.
  * HANYA mengambil dan menampilkan histori pesanan dengan status 'Selesai' (DELIVERED)
- * atau 'Gagal/Retur' (FAILED).
+ * atau 'Gagal/Retur' (FAILED) secara real-time melalui streamMyDeliveries().
  */
 @Composable
 fun DeliveryHistoryScreen(
@@ -69,10 +71,14 @@ fun DeliveryHistoryScreen(
 ) {
     BackHandler { onBack() }
 
-    val allOrders by repository.orders.collectAsState()
+    val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
+    val initialOrders = remember(repository) { repository.orders.value }
+    val allOrders by supabaseService.streamMyDeliveries().collectAsState(initial = initialOrders)
     // Filter HANYA pesanan berstatus Selesai atau Gagal
-    val historyOrders = allOrders.filter {
-        it.status == DeliveryStatus.DELIVERED || it.status == DeliveryStatus.FAILED
+    val historyOrders = remember(allOrders) {
+        allOrders.filter {
+            it.status == DeliveryStatus.DELIVERED || it.status == DeliveryStatus.FAILED
+        }
     }
 
     val completedCount = historyOrders.count { it.status == DeliveryStatus.DELIVERED }

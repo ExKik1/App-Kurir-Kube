@@ -2,7 +2,9 @@ package com.example.features.splash
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -80,18 +82,63 @@ fun SplashScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(horizontal = 32.dp)
         ) {
-            // Official Kube Logo Hero Asset (BoxFit.contain)
-            Image(
-                painter = painterResource(id = R.drawable.logo_kube),
-                contentDescription = "Logo Resmi Kube",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .size(220.dp)
-                    .scale(logoScale.value)
-                    .shadow(12.dp, CircleShape, ambientColor = Color(0x330083B0))
+            // Breathing/Pulsing Animation with Blue Glowing Halo Effect
+            val infiniteTransition = androidx.compose.animation.core.rememberInfiniteTransition(label = "pulse_transition")
+            val pulsingScale by infiniteTransition.animateFloat(
+                initialValue = 0.90f,
+                targetValue = 1.10f,
+                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                    animation = tween(durationMillis = 1100, easing = FastOutSlowInEasing),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                ),
+                label = "pulsing_scale"
+            )
+            val glowAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.35f,
+                targetValue = 0.75f,
+                animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+                    animation = tween(durationMillis = 1100, easing = FastOutSlowInEasing),
+                    repeatMode = androidx.compose.animation.core.RepeatMode.Reverse
+                ),
+                label = "glow_alpha"
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.size(240.dp)
+            ) {
+                // Glowing blue halo shadow behind ice cube
+                Box(
+                    modifier = Modifier
+                        .size(170.dp)
+                        .scale(pulsingScale * 1.15f)
+                        .clip(CircleShape)
+                        .background(Color(0xFF00B4DB).copy(alpha = glowAlpha))
+                        .shadow(40.dp, CircleShape, ambientColor = Color(0xFF00B4DB), spotColor = Color(0xFF00D2FF))
+                )
+
+                // Secondary soft cyan glow
+                Box(
+                    modifier = Modifier
+                        .size(130.dp)
+                        .scale(pulsingScale * 1.05f)
+                        .clip(CircleShape)
+                        .background(Color(0xFF4AC2E8).copy(alpha = glowAlpha * 0.8f))
+                )
+
+                // Official New Ice Cube Logo with Breathing / Pulsing Scale
+                Image(
+                    painter = painterResource(id = R.drawable.logo_kube_cube),
+                    contentDescription = "Logo Kubus Es Kube Baru",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .size(160.dp)
+                        .scale(logoScale.value * pulsingScale)
+                        .testTag("splash_cube_logo")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             Text(
                 text = "Es batu untuk setiap kebutuhan.",
@@ -100,7 +147,7 @@ fun SplashScreen(
                 color = Color.White.copy(alpha = 0.95f)
             )
 
-            Spacer(modifier = Modifier.height(60.dp))
+            Spacer(modifier = Modifier.height(50.dp))
 
             // Unified Linear Progress Indicator (Clean, non-stacked animation)
             LinearProgressIndicator(

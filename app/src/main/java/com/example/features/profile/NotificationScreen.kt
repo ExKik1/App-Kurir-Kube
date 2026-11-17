@@ -35,8 +35,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.core.components.LiquidGlassBackground
 import com.example.core.components.LiquidGlassCard
+import com.example.core.network.CourierSupabaseService
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeGreen
 import com.example.ui.theme.KubeTextDark
@@ -67,8 +68,8 @@ data class SystemNotification(
 )
 
 /**
- * Screen untuk Notifikasi Pemberitahuan Sistem Kurir.
- * Menampilkan pesan sistem: Tugas Baru Masuk, Pencairan Berhasil, PoD Disetujui, dll.
+ * Screen untuk Notifikasi Pemberitahuan Sistem Kurir (Real-Time Stream).
+ * Mengalirkan pesan sistem dari CourierSupabaseService.streamNotifications.
  */
 @Composable
 fun NotificationScreen(
@@ -76,61 +77,30 @@ fun NotificationScreen(
 ) {
     BackHandler { onBack() }
 
-    val notifications by remember {
-        mutableStateOf(
-            listOf(
-                SystemNotification(
-                    id = "NOTIF-01",
-                    title = "Tugas Baru Masuk",
-                    message = "Pesanan #ESB-00128 (10 balok es) ke Toko Es Segar telah ditugaskan ke armada Anda.",
-                    time = "10 menit yang lalu",
-                    icon = Icons.Filled.LocalShipping,
-                    iconTint = KubeBlueBright,
-                    iconBg = Color(0xFFE0F2FE),
-                    isUnread = true
-                ),
-                SystemNotification(
-                    id = "NOTIF-02",
-                    title = "Pencairan Berhasil",
-                    message = "Pencairan saldo komisi Rp 1.200.000 ke rekening BCA ****2831 telah sukses diproses finance Kube.",
-                    time = "1 jam yang lalu",
-                    icon = Icons.Filled.Payment,
-                    iconTint = KubeGreen,
-                    iconBg = Color(0xFFE8F5E9),
-                    isUnread = false
-                ),
-                SystemNotification(
-                    id = "NOTIF-03",
-                    title = "Verifikasi PoD Disetujui",
-                    message = "Laporan bukti pengantaran order #ESB-00126 (Supermarket Sehat) telah lolos verifikasi Admin.",
-                    time = "3 jam yang lalu",
-                    icon = Icons.Filled.CheckCircle,
-                    iconTint = Color(0xFF00897B),
-                    iconBg = Color(0xFFE0F2F1),
-                    isUnread = false
-                ),
-                SystemNotification(
-                    id = "NOTIF-04",
-                    title = "Pengumuman Operasional Gudang",
-                    message = "Pabrik Es Kube Banyumas beroperasi normal 24 jam dengan fasilitas loading crane es balok cepat.",
-                    time = "Hari ini, 06:00",
-                    icon = Icons.Filled.Campaign,
-                    iconTint = Color(0xFFE65100),
-                    iconBg = Color(0xFFFFF3E0),
-                    isUnread = false
-                ),
-                SystemNotification(
-                    id = "NOTIF-05",
-                    title = "Peringatan Rute & Cuaca",
-                    message = "Hujan gerimis terpantau di jalur Purwokerto Barat. Harap pastikan pintu freezer box terkunci rapat.",
-                    time = "Kemarin, 16:30",
-                    icon = Icons.Filled.CloudQueue,
-                    iconTint = Color(0xFF1E88E5),
-                    iconBg = Color(0xFFE3F2FD),
-                    isUnread = false
-                )
+    val notificationStream by CourierSupabaseService.instance
+        .streamNotifications()
+        .collectAsState(initial = emptyList())
+
+    val notifications = remember(notificationStream) {
+        notificationStream.map { record ->
+            val (icon, tint, bg) = when (record.category) {
+                "order" -> Triple(Icons.Filled.LocalShipping, KubeBlueBright, Color(0xFFE0F2FE))
+                "wallet" -> Triple(Icons.Filled.Payment, KubeGreen, Color(0xFFE8F5E9))
+                "pod" -> Triple(Icons.Filled.CheckCircle, Color(0xFF00897B), Color(0xFFE0F2F1))
+                "warehouse" -> Triple(Icons.Filled.Campaign, Color(0xFFE65100), Color(0xFFFFF3E0))
+                else -> Triple(Icons.Filled.CloudQueue, Color(0xFF1E88E5), Color(0xFFE3F2FD))
+            }
+            SystemNotification(
+                id = record.id,
+                title = record.title,
+                message = record.message,
+                time = record.time,
+                icon = icon,
+                iconTint = tint,
+                iconBg = bg,
+                isUnread = record.isUnread
             )
-        )
+        }
     }
 
     LiquidGlassBackground(

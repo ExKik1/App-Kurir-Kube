@@ -248,36 +248,6 @@ fun InteractiveRouteMapView(
             drawContext.canvas.nativeCanvas.drawText("Toko Es Segar", p4.x - 38f * zoomScale, p4.y - 18f * zoomScale, destPaint)
         }
 
-        // Top-Center Google Maps Mockup Status Badge
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 10.dp)
-                .shadow(3.dp, RoundedCornerShape(12.dp)),
-            shape = RoundedCornerShape(12.dp),
-            color = Color(0xFF1E293B).copy(alpha = 0.90f),
-            border = BorderStroke(0.8.dp, Color.White.copy(alpha = 0.35f))
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF00E676))
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = "Google Maps Mockup • dummy_key",
-                    fontSize = 9.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White
-                )
-            }
-        }
-
         // Top-Left Floating ETA Pill (Connected to Directions API)
         Surface(
             modifier = Modifier
