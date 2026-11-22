@@ -270,7 +270,7 @@ class OrderRepository {
         _courier.update {
             it.copy(
                 isActiveDuty = isOnDuty,
-                statusText = if (isOnDuty) "Selamat Bertugas" else "Sedang Istirahat"
+                statusText = if (isOnDuty) "Selamat Bertugas" else "Sedang Istirahat (Off-Duty)"
             )
         }
     }
@@ -345,7 +345,7 @@ class OrderRepository {
                 phone = remoteCourier.phone.ifBlank { current.phone },
                 address = remoteCourier.address.ifBlank { current.address },
                 isActiveDuty = remoteCourier.isActiveDuty,
-                statusText = if (remoteCourier.isActiveDuty) "Selamat Bertugas" else "Sedang Istirahat",
+                statusText = if (remoteCourier.isActiveDuty) "Selamat Bertugas" else "Sedang Istirahat (Off-Duty)",
                 bankAccountNumber = remoteCourier.bankAccountNumber.ifBlank { current.bankAccountNumber },
                 bankName = remoteCourier.bankName.ifBlank { current.bankName },
                 bankAccountHolder = remoteCourier.bankAccountHolder.ifBlank { current.bankAccountHolder },

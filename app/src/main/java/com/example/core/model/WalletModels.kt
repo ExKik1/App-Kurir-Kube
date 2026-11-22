@@ -4,8 +4,8 @@ package com.example.core.model
  * Status of courier withdrawal request.
  */
 enum class WithdrawalStatus(val label: String) {
-    WAITING("Menunggu"),
-    PROCESSING("Diproses"),
+    WAITING("Menunggu Admin"),
+    PROCESSING("Konfirmasi Dana"),
     SUCCESS("Berhasil"),
     REJECTED("Ditolak")
 }
@@ -21,7 +21,10 @@ data class WithdrawalHistoryItem(
     val amount: Long,
     val date: String,
     val status: WithdrawalStatus,
-    val rejectionReason: String? = null
+    val rejectionReason: String? = null,
+    val transferProofUrl: String? = null,
+    val processedAt: String? = null,
+    val processedByName: String? = null
 )
 
 /**

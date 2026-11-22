@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,34 +28,40 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.LocalShipping
-import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material.icons.filled.Payment
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.core.components.LiquidGlassBackground
-import com.example.core.components.LiquidGlassCard
+import com.example.core.components.DbBodyText
+import com.example.core.components.DbTitleText
+import com.example.core.components.KubeAtmosphericBackground
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassIconBox
+import com.example.core.components.KubeGlassPill
+import com.example.core.components.KubeMutedText
+import com.example.core.components.KubePrimaryText
 import com.example.core.network.CourierSupabaseService
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeGreen
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
+import kotlinx.coroutines.launch
 
 data class SystemNotification(
     val id: String,
@@ -69,7 +76,7 @@ data class SystemNotification(
 
 /**
  * Screen untuk Notifikasi Pemberitahuan Sistem Kurir (Real-Time Stream).
- * Mengalirkan pesan sistem dari CourierSupabaseService.streamNotifications.
+ * Mengalirkan pesan sistem dari CourierSupabaseService.streamNotifications dan menyinkronkan status dibaca (`is_read`).
  */
 @Composable
 fun NotificationScreen(
@@ -77,6 +84,7 @@ fun NotificationScreen(
 ) {
     BackHandler { onBack() }
 
+    val coroutineScope = rememberCoroutineScope()
     val activeCourierProfileId by CourierSupabaseService.instance.activeCourierProfileId.collectAsState()
     val notificationStream by CourierSupabaseService.instance
         .streamNotifications(activeCourierProfileId.orEmpty())
@@ -104,13 +112,18 @@ fun NotificationScreen(
         }
     }
 
-    LiquidGlassBackground(
+    val hasUnread = remember(notifications) { notifications.any { it.isUnread } }
+
+    KubeAtmosphericBackground(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
             .testTag("notification_screen")
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
             // Top Bar
             Row(
                 modifier = Modifier
@@ -118,30 +131,27 @@ fun NotificationScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
+                KubeGlassCard(
                     modifier = Modifier
                         .size(44.dp)
-                        .shadow(3.dp, CircleShape, ambientColor = Color(0x1A0083B0))
-                        .clip(CircleShape)
-                        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)), CircleShape),
+                        .testTag("btn_back_notification"),
                     shape = CircleShape,
-                    color = Color.White.copy(alpha = 0.50f)
+                    contentPadding = PaddingValues(0.dp),
+                    onClick = onBack
                 ) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("btn_back_notification")
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Kembali",
-                            tint = KubeTextDark
+                            tint = KubeTextDark,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.width(14.dp))
 
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Notifikasi Sistem",
                         fontSize = 20.sp,
@@ -151,21 +161,90 @@ fun NotificationScreen(
                     Text(
                         text = "Pemberitahuan tugas, keuangan, dan sistem Kube",
                         fontSize = 12.sp,
-                        color = KubeTextMuted
+                        color = Color(0xFF1E3A4C)
                     )
+                }
+
+                if (hasUnread) {
+                    TextButton(
+                        onClick = {
+                            val unreadItems = notifications.filter { it.isUnread }
+                            coroutineScope.launch {
+                                unreadItems.forEach { item ->
+                                    CourierSupabaseService.instance.markNotificationAsRead(item.id)
+                                }
+                            }
+                        },
+                        modifier = Modifier.testTag("btn_mark_all_notifications_read")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DoneAll,
+                            contentDescription = null,
+                            tint = KubeBlueBright,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Tandai semua dibaca",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KubeBlueBright
+                        )
+                    }
                 }
             }
 
-            // List of Notifications
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("list_notifications"),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(notifications, key = { it.id }) { notif ->
-                    NotificationGlassCard(item = notif)
+            if (notifications.isEmpty()) {
+                KubeGlassCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .testTag("empty_notifications_card"),
+                    shape = RoundedCornerShape(22.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        KubeGlassIconBox(
+                            icon = Icons.Filled.NotificationsNone,
+                            contentDescription = null,
+                            tint = KubeMutedText,
+                            boxSize = 48.dp,
+                            iconSize = 24.dp
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        DbTitleText(text = "Belum Ada Notifikasi")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        DbBodyText(
+                            text = "Pemberitahuan tugas pengiriman, keuangan, dan verifikasi rekening akan muncul di sini.",
+                            maxLines = 2,
+                            color = Color(0xFF1E3A4C)
+                        )
+                    }
+                }
+            } else {
+                // List of Notifications
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("list_notifications"),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(notifications, key = { it.id }) { notif ->
+                        NotificationGlassCard(
+                            item = notif,
+                            onClick = {
+                                if (notif.isUnread) {
+                                    coroutineScope.launch {
+                                        CourierSupabaseService.instance.markNotificationAsRead(notif.id)
+                                    }
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -173,36 +252,31 @@ fun NotificationScreen(
 }
 
 @Composable
-private fun NotificationGlassCard(item: SystemNotification) {
-    LiquidGlassCard(
+private fun NotificationGlassCard(
+    item: SystemNotification,
+    onClick: () -> Unit
+) {
+    KubeGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("notif_card_${item.id}"),
         shape = RoundedCornerShape(20.dp),
-        elevation = 3.dp,
-        fillAlphaTop = if (item.isUnread) 0.65f else 0.50f,
-        fillAlphaBottom = if (item.isUnread) 0.35f else 0.25f,
-        borderAlphaTop = 0.90f,
-        borderAlphaBottom = 0.35f
+        isHighlighted = item.isUnread,
+        contentPadding = PaddingValues(16.dp),
+        onClick = onClick
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.Top
         ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(item.iconBg),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = item.icon,
-                    contentDescription = null,
-                    tint = item.iconTint,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
+            KubeGlassIconBox(
+                icon = item.icon,
+                contentDescription = null,
+                tint = item.iconTint,
+                isHighlighted = item.isUnread,
+                boxSize = 44.dp,
+                iconSize = 22.dp
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -212,36 +286,27 @@ private fun NotificationGlassCard(item: SystemNotification) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
+                    DbTitleText(
                         text = item.title,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = KubeTextDark
+                        color = KubePrimaryText,
+                        modifier = Modifier.weight(1f)
                     )
 
                     if (item.isUnread) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = KubeBlueBright
-                        ) {
-                            Text(
-                                text = "Baru",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        KubeGlassPill(
+                            text = "Baru",
+                            textColor = Color(0xFF0284C7)
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                Text(
+                DbBodyText(
                     text = item.message,
-                    fontSize = 13.sp,
-                    color = KubeTextDark.copy(alpha = 0.85f),
-                    lineHeight = 18.sp
+                    maxLines = 4,
+                    color = Color(0xFF1E3A4C)
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -250,14 +315,14 @@ private fun NotificationGlassCard(item: SystemNotification) {
                     Icon(
                         imageVector = Icons.Filled.AccessTime,
                         contentDescription = null,
-                        tint = KubeTextMuted,
+                        tint = Color(0xFF1E3A4C),
                         modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = item.time,
                         fontSize = 11.sp,
-                        color = KubeTextMuted
+                        color = Color(0xFF1E3A4C)
                     )
                 }
             }

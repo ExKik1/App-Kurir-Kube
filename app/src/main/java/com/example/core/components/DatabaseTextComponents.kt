@@ -2,8 +2,10 @@ package com.example.core.components
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -17,6 +19,40 @@ import androidx.compose.ui.unit.sp
 val KubePrimaryText = Color(0xFF0F172A)   // Slate 900 - Tajam & Kontras Tinggi
 val KubeSecondaryText = Color(0xFF334155) // Slate 700 - Alamat & Deskripsi Item
 val KubeMutedText = Color(0xFF64748B)     // Slate 500 - Label & Timestamp
+
+val KubeInputTextStyle = TextStyle(
+    color = Color(0xFF0F172A),
+    fontSize = 14.sp
+)
+
+@Composable
+fun kubeLightTextFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = Color(0xFF0F172A),
+    unfocusedTextColor = Color(0xFF0F172A),
+    disabledTextColor = Color(0xFF334155),
+    cursorColor = Color(0xFF0083B0),
+    focusedContainerColor = Color.White,
+    unfocusedContainerColor = Color(0xFFF8FAFC),
+    disabledContainerColor = Color(0xFFF1F5F9),
+    focusedBorderColor = Color(0xFF0083B0),
+    unfocusedBorderColor = Color(0xFFCBD5E1),
+    disabledBorderColor = Color(0xFFCBD5E1),
+    focusedPlaceholderColor = Color(0xFF64748B),
+    unfocusedPlaceholderColor = Color(0xFF94A3B8),
+    focusedLeadingIconColor = Color(0xFF0083B0),
+    unfocusedLeadingIconColor = Color(0xFF475569),
+    disabledLeadingIconColor = Color(0xFF64748B),
+    focusedTrailingIconColor = Color(0xFF475569),
+    unfocusedTrailingIconColor = Color(0xFF64748B),
+    disabledTrailingIconColor = Color(0xFF94A3B8),
+    focusedLabelColor = Color(0xFF0083B0),
+    unfocusedLabelColor = Color(0xFF475569),
+    disabledLabelColor = Color(0xFF64748B),
+    errorTextColor = Color(0xFF0F172A),
+    errorContainerColor = Color.White,
+    errorBorderColor = Color(0xFFE53935),
+    errorCursorColor = Color(0xFFE53935)
+)
 
 @Composable
 fun DbTitleText(

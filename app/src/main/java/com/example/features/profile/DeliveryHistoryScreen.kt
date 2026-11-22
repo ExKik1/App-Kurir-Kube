@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -29,30 +31,36 @@ import androidx.compose.material.icons.filled.HighlightOff
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Store
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.core.components.LiquidDarkGlassCard
-import com.example.core.components.LiquidGlassBackground
-import com.example.core.components.LiquidGlassCard
+import com.example.core.components.DarkObsidianGlassCard
+import com.example.core.components.DeliveryHistoryDetailBottomSheet
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassIconBox
+import com.example.core.components.KubeGlassPill
 import com.example.core.model.DeliveryOrder
 import com.example.core.model.DeliveryStatus
 import com.example.core.network.CourierSupabaseService
+import com.example.core.network.OrderPaymentMeta
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeCyan
@@ -75,6 +83,7 @@ fun DeliveryHistoryScreen(
     val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
     val initialOrders = remember(repository) { repository.orders.value }
     val allOrders by supabaseService.streamMyDeliveries(activeCourierProfileId.orEmpty()).collectAsState(initial = initialOrders)
+
     // Filter HANYA pesanan berstatus Selesai atau Gagal
     val historyOrders = remember(allOrders) {
         allOrders.filter {
@@ -84,8 +93,9 @@ fun DeliveryHistoryScreen(
 
     val completedCount = historyOrders.count { it.status == DeliveryStatus.DELIVERED }
     val failedCount = historyOrders.count { it.status == DeliveryStatus.FAILED }
+    var selectedDetailOrder by remember { mutableStateOf<DeliveryOrder?>(null) }
 
-    LiquidGlassBackground(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
@@ -101,23 +111,20 @@ fun DeliveryHistoryScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
+                KubeGlassCard(
                     modifier = Modifier
                         .size(44.dp)
-                        .shadow(3.dp, CircleShape, ambientColor = Color(0x1A0083B0))
-                        .clip(CircleShape)
-                        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)), CircleShape),
+                        .testTag("btn_back_delivery_history"),
                     shape = CircleShape,
-                    color = Color.White.copy(alpha = 0.50f)
+                    contentPadding = PaddingValues(0.dp),
+                    onClick = onBack
                 ) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("btn_back_delivery_history")
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Kembali",
-                            tint = KubeTextDark
+                            tint = KubeTextDark,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -134,19 +141,22 @@ fun DeliveryHistoryScreen(
                     Text(
                         text = "Daftar pesanan Selesai dan Retur/Gagal",
                         fontSize = 12.sp,
-                        color = KubeTextMuted
+                        color = Color(0xFF1E3A4C)
                     )
                 }
             }
 
             // Summary Metric Card
-            LiquidDarkGlassCard(
+            DarkObsidianGlassCard(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                shape = RoundedCornerShape(24.dp)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -228,37 +238,76 @@ fun DeliveryHistoryScreen(
                         .fillMaxSize()
                         .testTag("list_delivery_history"),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(historyOrders, key = { it.id }) { order ->
-                        HistoryOrderItemCard(order = order)
+                        val meta = supabaseService.getOrderMeta(order.id)
+                        HistoryOrderItemCard(
+                            order = order,
+                            meta = meta,
+                            onClick = { selectedDetailOrder = order }
+                        )
                     }
                 }
             }
+        }
+
+        selectedDetailOrder?.let { detailOrder ->
+            DeliveryHistoryDetailBottomSheet(
+                order = detailOrder,
+                meta = supabaseService.getOrderMeta(detailOrder.id),
+                onDismiss = { selectedDetailOrder = null }
+            )
         }
     }
 }
 
 @Composable
-private fun HistoryOrderItemCard(order: DeliveryOrder) {
+internal fun HistoryOrderItemCard(
+    order: DeliveryOrder,
+    meta: OrderPaymentMeta? = CourierSupabaseService.instance.getOrderMeta(order.id),
+    onClick: () -> Unit = {}
+) {
     val isDelivered = order.status == DeliveryStatus.DELIVERED
     val statusBg = if (isDelivered) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
     val statusText = if (isDelivered) Color(0xFF2E7D32) else Color(0xFFC62828)
     val statusLabel = if (isDelivered) "Terkirim (Selesai)" else "Gagal / Retur"
 
-    LiquidGlassCard(
+    val isCod = meta?.isCodOrder ?: order.isCod
+    val paymentMethodLabel = when {
+        isCod -> "COD Tunai"
+        !meta?.paymentMethodName.isNullOrBlank() -> meta!!.paymentMethodName
+        order.paymentMethod.isNotBlank() -> order.paymentMethod
+        else -> "Non-Tunai"
+    }
+    val totalAmount = meta?.totalAmount?.takeIf { it > 0L } ?: order.totalAmount
+    val commissionAmount = meta?.commissionAmount?.takeIf { it > 0L }
+        ?: (order.defaultQuantity.coerceAtLeast(1) * 5000L)
+
+    val recipientName = meta?.recipientName?.takeIf { it.isNotBlank() }
+        ?: order.proofOfDelivery?.recipientName?.takeIf { it.isNotBlank() }
+        ?: "-"
+    val completedTime = meta?.deliveredAtFormatted?.takeIf { it.isNotBlank() }
+        ?: order.deliveredTime?.takeIf { it.isNotBlank() }
+        ?: order.inTransitTime?.takeIf { it.isNotBlank() }
+        ?: order.assignedTime
+
+    KubeGlassCard(
         modifier = Modifier
             .fillMaxWidth()
+            .wrapContentHeight()
             .testTag("history_card_${order.id}"),
-        shape = RoundedCornerShape(20.dp),
-        elevation = 3.dp,
-        fillAlphaTop = 0.55f,
-        fillAlphaBottom = 0.28f,
-        borderAlphaTop = 0.90f,
-        borderAlphaBottom = 0.35f
+        shape = RoundedCornerShape(22.dp),
+        isHighlighted = false,
+        contentPadding = PaddingValues(16.dp),
+        onClick = onClick
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Header Row: Customer Name & Status Badge
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+        ) {
+            // 1. Baris Header: Nama pelanggan/kafe, kode pesanan, dan badge status
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -268,121 +317,218 @@ private fun HistoryOrderItemCard(order: DeliveryOrder) {
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(if (isDelivered) Color(0xFFE0F2FE) else Color(0xFFFFEBEE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (isDelivered) Icons.Filled.Store else Icons.Filled.HighlightOff,
-                            contentDescription = null,
-                            tint = if (isDelivered) KubeBlueBright else Color(0xFFC62828),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = if (isDelivered) Icons.Filled.Store else Icons.Filled.HighlightOff,
+                        contentDescription = null,
+                        tint = if (isDelivered) KubeBlueBright else Color(0xFFC62828),
+                        boxSize = 40.dp,
+                        iconSize = 20.dp
+                    )
 
                     Spacer(modifier = Modifier.width(10.dp))
 
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = order.customerName,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
-                            color = KubeTextDark
+                            color = Color(0xFF0F172A),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Pesanan #${order.id}",
+                            text = "#${order.id}",
                             fontSize = 11.sp,
-                            color = KubeTextMuted
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF1E3A4C)
                         )
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = statusBg,
-                    border = BorderStroke(1.dp, statusText.copy(alpha = 0.30f))
+                Spacer(modifier = Modifier.width(8.dp))
+
+                KubeGlassPill(
+                    text = statusLabel,
+                    textColor = statusText
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 2. Baris Alamat Lengkap
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.LocationOn,
+                    contentDescription = null,
+                    tint = Color(0xFFE53935),
+                    modifier = Modifier
+                        .size(16.dp)
+                        .padding(top = 1.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = order.address,
+                    fontSize = 12.sp,
+                    color = Color(0xFF1E3A4C),
+                    lineHeight = 16.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 3. Kotak Rincian Barang Es (blok tersendiri, maxLines = 3, lineHeight = 18.sp)
+            KubeGlassCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = if (isDelivered) Icons.Filled.CheckCircle else Icons.Filled.HighlightOff,
-                            contentDescription = null,
-                            tint = statusText,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Filled.Inbox,
+                        contentDescription = null,
+                        tint = KubeBlueBright,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .padding(top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = order.itemDescription,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF0F172A),
+                        lineHeight = 18.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 4. Grid Ringkasan Keuangan & Pengantaran (2 Kolom)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                KubeGlassCard(
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column {
                         Text(
-                            text = statusLabel,
+                            text = paymentMethodLabel,
                             fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF1E3A4C),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = formatHistoryCardRupiah(totalAmount),
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            color = statusText
+                            color = Color(0xFF0F172A),
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                KubeGlassCard(
+                    shape = RoundedCornerShape(14.dp),
+                    isHighlighted = true,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Column {
+                        Text(
+                            text = "Komisi Kurir",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF065F46),
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "+ ${formatHistoryCardRupiah(commissionAmount)}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF059669),
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = Color(0xFFCBD5E1).copy(alpha = 0.45f))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Address Row
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.LocationOn,
-                    contentDescription = null,
-                    tint = Color(0xFFE53935),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "${order.address}, ${order.subDistrict}",
-                    fontSize = 12.sp,
-                    color = KubeTextMuted
-                )
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Item Description & Timestamp Row
+            // 5. Footer Penerima & Waktu Selesai
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
-                        imageVector = Icons.Filled.Inbox,
+                        imageVector = Icons.Filled.Person,
                         contentDescription = null,
-                        tint = KubeBlueBright,
-                        modifier = Modifier.size(16.dp)
+                        tint = Color(0xFF475569),
+                        modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = order.itemDescription,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = KubeTextDark
+                        text = "Diterima: $recipientName",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF1E3A4C),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("history_recipient_${order.id}")
                     )
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Filled.AccessTime,
                         contentDescription = null,
-                        tint = KubeTextMuted,
-                        modifier = Modifier.size(14.dp)
+                        tint = Color(0xFF1E3A4C),
+                        modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = order.deliveredTime ?: order.inTransitTime ?: order.assignedTime,
+                        text = completedTime,
                         fontSize = 11.sp,
-                        color = KubeTextMuted
+                        color = Color(0xFF1E3A4C),
+                        softWrap = false,
+                        modifier = Modifier.testTag("history_time_${order.id}")
                     )
                 }
             }
         }
     }
+}
+
+private fun formatHistoryCardRupiah(amount: Long): String {
+    return "Rp ${"%,d".format(amount).replace(',', '.')}"
 }

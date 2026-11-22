@@ -16,59 +16,53 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountBalance
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.core.components.LiquidDarkGlassCard
-import com.example.core.components.LiquidGlassBackground
-import com.example.core.components.LiquidGlassCard
+import com.example.core.components.BankAccountChangeBottomSheet
+import com.example.core.components.BankVerificationStatusPill
+import com.example.core.components.DarkObsidianGlassCard
+import com.example.core.components.KubeFeedbackManager
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassIconBox
 import com.example.core.model.maskAccountNumber
 import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeCyan
-import com.example.ui.theme.KubeGreen
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
-import kotlinx.coroutines.launch
 
 /**
  * Screen Rekening Bank Kurir.
- * - Card rekening BCA dengan string masking (contoh: ******2831 atau **** **** 2831).
- * - Tombol 'Ajukan Perubahan Rekening' yang HANYA memunculkan snackbar atau dialog:
- *   'Permintaan perubahan rekening telah dikirim ke Admin. Menunggu verifikasi'.
+ * - Menampilkan rekening utama dari `public.courier_bank_accounts` lengkap dengan status verifikasi.
+ * - Tombol 'Ajukan Perubahan Rekening' membuka bottom sheet untuk mengirim data rekening baru + foto buku tabungan ke Supabase.
  */
 @Composable
 fun BankAccountScreen(
@@ -82,60 +76,39 @@ fun BankAccountScreen(
     val initialCourier = remember(repository) { repository.courier.value }
     val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
     val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
-    val snackbarHostState = remember { SnackbarHostState() }
-    val coroutineScope = rememberCoroutineScope()
-    var showConfirmationDialog by remember { mutableStateOf(false) }
+    val bankAccounts by supabaseService.bankAccounts.collectAsState()
+    val primaryBank = remember(bankAccounts) {
+        bankAccounts.firstOrNull { it.isPrimary } ?: bankAccounts.firstOrNull()
+    }
 
-    if (showConfirmationDialog) {
-        AlertDialog(
-            onDismissRequest = { showConfirmationDialog = false },
-            icon = {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFE8F5E9)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Check,
-                        contentDescription = null,
-                        tint = Color(0xFF2E7D32),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            },
-            title = {
-                Text(
-                    text = "Permintaan Terkirim",
-                    fontWeight = FontWeight.Bold,
-                    color = KubeTextDark
+    val displayBankName = primaryBank?.bankName?.takeIf { it.isNotBlank() && it != "-" }
+        ?: courier.bankName.ifBlank { "Bank" }
+    val displayAccountNumber = primaryBank?.accountNumber?.takeIf { it.isNotBlank() && it != "-" }
+        ?: courier.bankAccountNumber
+    val displayAccountHolder = primaryBank?.accountHolder?.takeIf { it.isNotBlank() && it != "-" }
+        ?: courier.bankAccountHolder.ifBlank { courier.name.ifBlank { "-" } }
+
+    var showBankChangeSheet by remember { mutableStateOf(false) }
+
+    if (showBankChangeSheet) {
+        BankAccountChangeBottomSheet(
+            initialBankName = displayBankName,
+            initialAccountHolder = displayAccountHolder,
+            onDismiss = { showBankChangeSheet = false },
+            onSubmitSuccess = { created ->
+                showBankChangeSheet = false
+                KubeFeedbackManager.showSuccess(
+                    "Pengajuan Rekening Terkirim",
+                    "Data rekening ${created.bankName} berhasil dikirim dan menunggu verifikasi Admin."
                 )
-            },
-            text = {
-                Text(
-                    text = "Permintaan perubahan rekening telah dikirim ke Admin. Menunggu verifikasi.",
-                    fontSize = 14.sp,
-                    color = KubeTextDark,
-                    lineHeight = 20.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showConfirmationDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright)
-                ) {
-                    Text("OK", fontWeight = FontWeight.Bold)
-                }
             }
         )
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color.Transparent
     ) { paddingValues ->
-        LiquidGlassBackground(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -145,7 +118,9 @@ fun BankAccountScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp)
+                    .padding(bottom = 120.dp)
             ) {
                 // Top Bar
                 Row(
@@ -154,23 +129,20 @@ fun BankAccountScreen(
                         .padding(vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
+                    KubeGlassCard(
                         modifier = Modifier
                             .size(44.dp)
-                            .shadow(3.dp, CircleShape, ambientColor = Color(0x1A0083B0))
-                            .clip(CircleShape)
-                            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)), CircleShape),
+                            .testTag("btn_back_bank_account"),
                         shape = CircleShape,
-                        color = Color.White.copy(alpha = 0.50f)
+                        contentPadding = PaddingValues(0.dp),
+                        onClick = onBack
                     ) {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.testTag("btn_back_bank_account")
-                        ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Kembali",
-                                tint = KubeTextDark
+                                tint = KubeTextDark,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -187,32 +159,34 @@ fun BankAccountScreen(
                         Text(
                             text = "Rekening pencairan dana komisi kurir",
                             fontSize = 12.sp,
-                            color = KubeTextMuted
+                            color = Color(0xFF1E3A4C)
                         )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // BCA Card with Masked Number
-                LiquidDarkGlassCard(
+                // Primary Bank Card with Masked Number & Live Verification Badge
+                DarkObsidianGlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("card_rekening_utama"),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = 6.dp
+                    shape = RoundedCornerShape(24.dp)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(8.dp)
+                            .padding(20.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(46.dp)
@@ -222,7 +196,7 @@ fun BankAccountScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.AccountBalance,
-                                        contentDescription = "BCA",
+                                        contentDescription = displayBankName,
                                         tint = Color(0xFF0D47A1),
                                         modifier = Modifier.size(24.dp)
                                     )
@@ -232,32 +206,24 @@ fun BankAccountScreen(
 
                                 Column {
                                     Text(
-                                        text = courier.bankName,
+                                        text = displayBankName,
                                         fontSize = 18.sp,
                                         fontWeight = FontWeight.ExtraBold,
                                         color = Color.White
                                     )
                                     Text(
-                                        text = "Bank Central Asia",
+                                        text = if (primaryBank?.isPrimary == true) "Rekening Utama" else "Rekening Pencairan",
                                         fontSize = 11.sp,
                                         color = Color.White.copy(alpha = 0.70f)
                                     )
                                 }
                             }
 
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = KubeGreen.copy(alpha = 0.25f),
-                                border = BorderStroke(1.dp, KubeGreen.copy(alpha = 0.50f))
-                            ) {
-                                Text(
-                                    text = "Utama & Terverifikasi",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = KubeCyan,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            BankVerificationStatusPill(
+                                verificationStatus = primaryBank?.verificationStatus
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(24.dp))
@@ -274,7 +240,7 @@ fun BankAccountScreen(
 
                         // Masked Account Number
                         Text(
-                            text = maskAccountNumber(courier.bankAccountNumber),
+                            text = if (displayAccountNumber.isBlank()) "Belum diatur" else maskAccountNumber(displayAccountNumber),
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
@@ -294,7 +260,7 @@ fun BankAccountScreen(
                         Spacer(modifier = Modifier.height(2.dp))
 
                         Text(
-                            text = courier.bankAccountHolder,
+                            text = displayAccountHolder,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = KubeCyan
@@ -305,31 +271,22 @@ fun BankAccountScreen(
                 Spacer(modifier = Modifier.height(20.dp))
 
                 // Security Policy Note Card
-                LiquidGlassCard(
+                KubeGlassCard(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    elevation = 2.dp,
-                    fillAlphaTop = 0.50f,
-                    fillAlphaBottom = 0.25f
+                    shape = RoundedCornerShape(20.dp),
+                    contentPadding = PaddingValues(16.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.Top
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFFEF3C7)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Lock,
-                                contentDescription = null,
-                                tint = Color(0xFFD97706),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                        KubeGlassIconBox(
+                            icon = Icons.Filled.Lock,
+                            contentDescription = null,
+                            tint = Color(0xFFD97706),
+                            boxSize = 38.dp,
+                            iconSize = 18.dp
+                        )
 
                         Spacer(modifier = Modifier.width(12.dp))
 
@@ -342,9 +299,9 @@ fun BankAccountScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Demi keamanan penghasilan Anda dan menghindari penyalahgunaan akun, kurir tidak dapat mengubah nomor rekening secara mandiri.",
+                                text = "Pengajuan rekening baru akan masuk ke daftar antrean verifikasi Admin sebelum dapat digunakan untuk penarikan saldo.",
                                 fontSize = 12.sp,
-                                color = KubeTextMuted,
+                                color = Color(0xFF1E3A4C),
                                 lineHeight = 16.sp
                             )
                         }
@@ -355,14 +312,7 @@ fun BankAccountScreen(
 
                 // Single Button: Ajukan Perubahan Rekening
                 Button(
-                    onClick = {
-                        showConfirmationDialog = true
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar(
-                                "Permintaan perubahan rekening telah dikirim ke Admin. Menunggu verifikasi."
-                            )
-                        }
-                    },
+                    onClick = { showBankChangeSheet = true },
                     colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier

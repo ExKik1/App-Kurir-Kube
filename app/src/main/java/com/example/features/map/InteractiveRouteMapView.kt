@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,18 +30,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.LocalShipping
-import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,7 +54,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import android.graphics.Paint
 import android.graphics.Typeface
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -69,11 +63,15 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassIconBox
+import com.example.core.components.KubeGlassPill
 import com.example.core.model.RouteEta
 import com.example.ui.theme.KubeBlueBright
-import com.example.ui.theme.KubeTextDark
 
 enum class MapLayerType {
     STREET,
@@ -93,6 +91,12 @@ enum class MapLayerType {
 @Composable
 fun InteractiveRouteMapView(
     routeEta: RouteEta,
+    destinationName: String = routeEta.destinationName,
+    destinationAddress: String = routeEta.destinationAddress,
+    distanceKm: Double = routeEta.distanceKm,
+    estimatedTimeMinutes: Int = routeEta.durationMinutes,
+    destLat: Double? = routeEta.destLat,
+    destLng: Double? = routeEta.destLng,
     modifier: Modifier = Modifier,
     onMapClick: () -> Unit = {}
 ) {
@@ -117,18 +121,24 @@ fun InteractiveRouteMapView(
     )
 
     fun openInGoogleMapsApp() {
-        val gmmIntentUri = Uri.parse(
-            "google.navigation:q=${routeEta.destLat},${routeEta.destLng}&mode=d"
-        )
+        val encodedAddr = Uri.encode(destinationAddress)
+        val gmmIntentUri = if (destLat != null && destLng != null) {
+            val label = Uri.encode("$destinationName ($destinationAddress)")
+            Uri.parse("geo:$destLat,$destLng?q=$destLat,$destLng($label)")
+        } else {
+            Uri.parse("geo:0,0?q=$encodedAddr")
+        }
         val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
         mapIntent.setPackage("com.google.android.apps.maps")
         try {
             context.startActivity(mapIntent)
         } catch (e: Exception) {
-            val webIntent = Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${routeEta.destLat},${routeEta.destLng}")
-            )
+            val webUrl = if (destLat != null && destLng != null) {
+                "https://www.google.com/maps/search/?api=1&query=$destLat,$destLng"
+            } else {
+                "https://www.google.com/maps/search/?api=1&query=$encodedAddr"
+            }
+            val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(webUrl))
             context.startActivity(webIntent)
         }
     }
@@ -245,43 +255,51 @@ fun InteractiveRouteMapView(
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                 isAntiAlias = true
             }
-            drawContext.canvas.nativeCanvas.drawText("Toko Es Segar", p4.x - 38f * zoomScale, p4.y - 18f * zoomScale, destPaint)
+            val shortDestLabel = destinationName.take(24).let {
+                if (destinationName.length > 24) "$it…" else it
+            }
+            drawContext.canvas.nativeCanvas.drawText(shortDestLabel, p4.x - 42f * zoomScale, p4.y - 18f * zoomScale, destPaint)
         }
 
-        // Top-Left Floating ETA Pill (Connected to Directions API)
-        Surface(
+        // Top-Left Floating Direction Banner (KubeGlassCard + KubeGlassIconBox + KubeGlassPill)
+        KubeGlassCard(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(12.dp)
-                .shadow(4.dp, RoundedCornerShape(16.dp)),
-            shape = RoundedCornerShape(16.dp),
-            color = Color.White.copy(alpha = 0.95f),
-            border = BorderStroke(1.dp, Color.White)
+                .widthIn(max = 260.dp),
+            shape = RoundedCornerShape(18.dp),
+            isHighlighted = false,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Live Blinking Indicator
-                Icon(
-                    imageVector = Icons.Filled.FiberManualRecord,
-                    contentDescription = null,
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KubeGlassIconBox(
+                    icon = Icons.Filled.Navigation,
+                    contentDescription = "Petunjuk Arah",
                     tint = Color(routeEta.trafficColorHex),
-                    modifier = Modifier.size(12.dp)
+                    isHighlighted = false,
+                    boxSize = 34.dp,
+                    iconSize = 17.dp
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Column {
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = "Estimasi tiba ${routeEta.formattedEta}",
+                        text = routeEta.trafficCondition,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF072B4A)
+                        color = Color(0xFF0F172A),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = "${routeEta.trafficCondition} • ${routeEta.distanceKm} km",
-                        fontSize = 10.sp,
-                        color = Color(0xFF5A738E)
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        KubeGlassPill(
+                            text = "$distanceKm km",
+                            textColor = Color(0xFF0284C7)
+                        )
+                        KubeGlassPill(
+                            text = "$estimatedTimeMinutes menit",
+                            textColor = Color(0xFF0F172A)
+                        )
+                    }
                 }
             }
         }
@@ -367,11 +385,12 @@ fun InteractiveRouteMapView(
             }
         }
 
-        // Bottom-Left Active Street Tag & Google Logo Watermark
+        // Bottom-Left Active Customer Address Tag & Google Logo Watermark
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(10.dp),
+                .padding(10.dp)
+                .widthIn(max = 190.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             GoogleLogoWatermark()
@@ -393,10 +412,12 @@ fun InteractiveRouteMapView(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Jl. Melati, Purwokerto",
+                        text = destinationAddress,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -438,8 +459,8 @@ private fun MapControlMiniButton(
             .clickable(onClick = onClick)
             .shadow(3.dp, CircleShape),
         shape = CircleShape,
-        color = Color.White.copy(alpha = 0.95f),
-        border = BorderStroke(1.dp, Color.White)
+        color = Color.White.copy(alpha = 0.78f),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.90f))
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(
@@ -531,16 +552,15 @@ private fun DrawScope.drawMapBase(
         cap = StrokeCap.Round
     )
 
-    // Street Name Annotations
+    // Road grid annotations kept clean without static dummy street names
     val streetPaint = Paint().apply {
         color = if (isSatellite) 0xFFCFD8DC.toInt() else 0xFF546E7A.toInt()
         textSize = (9.5f * zoom).coerceIn(8f, 18f)
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         isAntiAlias = true
     }
-    drawContext.canvas.nativeCanvas.drawText("Jl. Jend. Soedirman", centerX - 130f * zoom, centerY + 104f * zoom, streetPaint)
-    drawContext.canvas.nativeCanvas.drawText("Jl. Overste Isdiman", centerX - 145f * zoom, centerY - 50f * zoom, streetPaint)
-    drawContext.canvas.nativeCanvas.drawText("Jl. Melati", centerX + 80f * zoom, centerY - 76f * zoom, streetPaint)
+    drawContext.canvas.nativeCanvas.drawText("Jalur Utama", centerX - 110f * zoom, centerY + 104f * zoom, streetPaint)
+    drawContext.canvas.nativeCanvas.drawText("Akses Tujuan", centerX + 75f * zoom, centerY - 76f * zoom, streetPaint)
 }
 
 private fun DrawScope.drawTrafficPolyline(

@@ -34,17 +34,14 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Payment
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.ThumbUp
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,16 +58,28 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.core.components.LiquidDarkGlassCard
-import com.example.core.components.LiquidGlassBackground
-import com.example.core.components.LiquidGlassCard
+import com.example.core.components.BankAccountChangeBottomSheet
+import com.example.core.components.BankVerificationStatusPill
+import com.example.core.components.DarkObsidianGlassCard
+import com.example.core.components.DbBodyText
+import com.example.core.components.DbCurrencyOrMetricText
+import com.example.core.components.DbTitleText
+import com.example.core.components.KubeFeedbackManager
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassIconBox
+import com.example.core.components.KubeGlassPill
+import com.example.core.components.KubeMutedText
+import com.example.core.components.KubePrimaryText
 import com.example.core.components.TopCourierBar
+import com.example.core.components.WithdrawalDetailBottomSheet
+import com.example.core.components.kubeLightTextFieldColors
 import com.example.core.model.CommissionHistoryItem
 import com.example.core.model.WithdrawalHistoryItem
 import com.example.core.model.WithdrawalStatus
@@ -87,7 +96,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun WalletScreen(
     repository: OrderRepository = OrderRepository.instance,
-    onNavigateToProfile: () -> Unit = {}
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToNotifications: () -> Unit = {}
 ) {
     val supabaseService = remember(repository) { CourierSupabaseService.forRepository(repository) }
     val activeCourierProfileId by supabaseService.activeCourierProfileId.collectAsState()
@@ -103,17 +113,20 @@ fun WalletScreen(
     val withdrawalList by supabaseService.streamWithdrawals(courierProfileId).collectAsState(initial = initialWithdrawals)
     val deliveries by supabaseService.streamMyDeliveries(courierProfileId).collectAsState(initial = emptyList())
     val notifications by supabaseService.streamNotifications(courierProfileId).collectAsState(initial = emptyList())
+    val bankAccounts by supabaseService.bankAccounts.collectAsState()
+    val primaryBank = remember(bankAccounts) {
+        bankAccounts.firstOrNull { it.isPrimary } ?: bankAccounts.firstOrNull()
+    }
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Riwayat Komisi, 1: Riwayat Pencairan
-    var showEditAccountDialog by remember { mutableStateOf(false) }
+    var showBankChangeSheet by remember { mutableStateOf(false) }
     var showWithdrawDialog by remember { mutableStateOf(false) }
+    var selectedWithdrawalDetail by remember { mutableStateOf<WithdrawalHistoryItem?>(null) }
 
-    val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
     val scrollState = rememberScrollState()
 
     Box(modifier = Modifier.fillMaxSize()) {
-        LiquidGlassBackground(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
@@ -131,7 +144,8 @@ fun WalletScreen(
                     statusSubtitle = "Dompet & Keuangan Kurir",
                     isOnDuty = courier.isActiveDuty,
                     textColor = KubeTextDark,
-                    onAvatarClick = onNavigateToProfile
+                    onAvatarClick = onNavigateToProfile,
+                    onNotifClick = onNavigateToNotifications
                 )
 
                 // Header Title
@@ -146,7 +160,7 @@ fun WalletScreen(
                     Text(
                         text = "Transparansi saldo, komisi pengiriman, dan riwayat penarikan",
                         fontSize = 13.sp,
-                        color = KubeTextMuted
+                        color = Color(0xFF1E3A4C)
                     )
                 }
 
@@ -163,41 +177,38 @@ fun WalletScreen(
                         .padding(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Card 1: Saldo Tertunda (Kuning / Abu-abu)
+                    // Card 1: Saldo Tertunda
                     BalanceMetricCard(
                         title = "Saldo Tertunda",
                         amountText = formatRupiah(walletBalance.pendingBalance),
-                        statusHint = "Menunggu verifikasi",
+                        statusHint = "Menunggu",
                         icon = Icons.Filled.AccessTime,
                         accentColor = Color(0xFFD97706),
-                        containerColor = Color(0xFFFFFBEB),
-                        borderColor = Color(0xFFFDE68A),
+                        isHighlighted = false,
                         tag = "card_saldo_tertunda",
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Card 2: Saldo Tersedia (Hijau)
+                    // Card 2: Saldo Tersedia
                     BalanceMetricCard(
                         title = "Saldo Tersedia",
                         amountText = formatRupiah(walletBalance.availableBalance),
-                        statusHint = "Siap dicairkan",
+                        statusHint = "Siap cair",
                         icon = Icons.Filled.CheckCircle,
                         accentColor = Color(0xFF059669),
-                        containerColor = Color(0xFFECFDF5),
-                        borderColor = Color(0xFFA7F3D0),
+                        isHighlighted = true,
                         tag = "card_saldo_tersedia",
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Card 3: Saldo Dicairkan (Biru)
+                    // Card 3: Saldo Dicairkan
                     BalanceMetricCard(
                         title = "Saldo Dicairkan",
                         amountText = formatRupiah(walletBalance.withdrawnBalance),
                         statusHint = "Total ditarik",
                         icon = Icons.Filled.Payment,
                         accentColor = Color(0xFF0284C7),
-                        containerColor = Color(0xFFF0F9FF),
-                        borderColor = Color(0xFFBAE6FD),
+                        isHighlighted = false,
                         tag = "card_saldo_dicairkan",
                         modifier = Modifier.weight(1f)
                     )
@@ -206,14 +217,17 @@ fun WalletScreen(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Action Tarik Saldo Tersedia
-                LiquidDarkGlassCard(
+                DarkObsidianGlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp)
-                        .testTag("action_withdraw_banner")
+                        .testTag("action_withdraw_banner"),
+                    shape = RoundedCornerShape(24.dp)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -224,13 +238,14 @@ fun WalletScreen(
                                 color = Color.White.copy(alpha = 0.80f)
                             )
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text(
+                            DbCurrencyOrMetricText(
                                 text = formatRupiah(walletBalance.availableBalance),
                                 fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
                                 color = KubeCyan
                             )
                         }
+
+                        Spacer(modifier = Modifier.width(12.dp))
 
                         Button(
                             onClick = { showWithdrawDialog = true },
@@ -263,107 +278,74 @@ fun WalletScreen(
                 // - String masking: 8830192831 -> **** **** 2831
                 // - Tombol 'Edit Rekening' memunculkan dialog 'Perubahan rekening harus melalui verifikasi Admin'
                 // ==========================================
-                LiquidGlassCard(
+                KubeGlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp)
                         .testTag("card_rekening_bca"),
                     shape = RoundedCornerShape(22.dp),
-                    elevation = 4.dp,
-                    fillAlphaTop = 0.55f,
-                    fillAlphaBottom = 0.28f,
-                    borderAlphaTop = 0.95f,
-                    borderAlphaBottom = 0.35f
+                    contentPadding = PaddingValues(16.dp)
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Bank Logo Box
-                            Box(
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFFE3F2FD)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.AccountBalance,
-                                    contentDescription = "Bank BCA",
-                                    tint = Color(0xFF0D47A1),
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
+                            KubeGlassIconBox(
+                                icon = Icons.Filled.AccountBalance,
+                                contentDescription = "Bank BCA",
+                                tint = Color(0xFF0D47A1),
+                                boxSize = 46.dp,
+                                iconSize = 22.dp
+                            )
 
                             Spacer(modifier = Modifier.width(14.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    val bankLabel = courier.bankName.ifBlank { "Bank" }
-                                    val accountMasked = if (courier.bankAccountNumber.isBlank()) {
-                                        "Belum diatur"
-                                    } else {
-                                        maskAccountNumber(courier.bankAccountNumber)
-                                    }
-                                    Text(
-                                        text = "$bankLabel • $accountMasked",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = KubeTextDark
-                                    )
+                                val bankLabel = primaryBank?.bankName?.takeIf { it.isNotBlank() && it != "-" }
+                                    ?: courier.bankName.ifBlank { "Bank" }
+                                val rawAccountNumber = primaryBank?.accountNumber?.takeIf { it.isNotBlank() && it != "-" }
+                                    ?: courier.bankAccountNumber
+                                val accountMasked = if (rawAccountNumber.isBlank()) {
+                                    "Belum diatur"
+                                } else {
+                                    maskAccountNumber(rawAccountNumber)
                                 }
+                                val holderName = primaryBank?.accountHolder?.takeIf { it.isNotBlank() && it != "-" }
+                                    ?: courier.bankAccountHolder.ifBlank { courier.name.ifBlank { "-" } }
+                                DbTitleText(
+                                    text = "$bankLabel • $accountMasked"
+                                )
                                 Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "a.n. ${courier.bankAccountHolder.ifBlank { courier.name.ifBlank { "-" } }}",
-                                    fontSize = 12.sp,
-                                    color = KubeTextMuted
+                                DbBodyText(
+                                    text = "a.n. $holderName",
+                                    maxLines = 1,
+                                    color = Color(0xFF1E3A4C)
                                 )
                             }
 
-                            // Verified badge
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFFE8F5E9),
-                                border = BorderStroke(1.dp, Color(0xFFC8E6C9))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Check,
-                                        contentDescription = null,
-                                        tint = Color(0xFF2E7D32),
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(
-                                        text = "Utama",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF2E7D32)
-                                    )
-                                }
-                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            BankVerificationStatusPill(
+                                verificationStatus = primaryBank?.verificationStatus
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
 
-                        // Edit Rekening Locked Button
+                        // Ajukan Perubahan Rekening Button
                         OutlinedButton(
-                            onClick = { showEditAccountDialog = true },
+                            onClick = { showBankChangeSheet = true },
                             shape = RoundedCornerShape(12.dp),
                             border = BorderStroke(1.dp, Color(0xFF0096C7).copy(alpha = 0.40f)),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = Color.White.copy(alpha = 0.60f)
+                                containerColor = Color.White.copy(alpha = 0.55f)
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(40.dp)
+                                .height(44.dp)
                                 .testTag("btn_edit_rekening")
                         ) {
                             Icon(
@@ -374,16 +356,10 @@ fun WalletScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Edit Rekening",
-                                fontSize = 12.sp,
+                                text = "Ajukan Perubahan Rekening",
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF0284C7)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "(Terkunci)",
-                                fontSize = 11.sp,
-                                color = KubeTextMuted
                             )
                         }
                     }
@@ -396,18 +372,15 @@ fun WalletScreen(
                 // Tab 1: Riwayat Komisi (Detail jenis pendapatan)
                 // Tab 2: Riwayat Pencairan (Status Menunggu, Diproses, Berhasil, Ditolak + Alasan)
                 // ==========================================
-                Surface(
+                KubeGlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color.White.copy(alpha = 0.70f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.85f))
+                    shape = RoundedCornerShape(18.dp),
+                    contentPadding = PaddingValues(4.dp)
                 ) {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(4.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         WalletTabPill(
@@ -446,15 +419,15 @@ fun WalletScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         if (commissionList.isEmpty()) {
-                            LiquidGlassCard(
+                            KubeGlassCard(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(18.dp),
-                                elevation = 2.dp
+                                contentPadding = PaddingValues(16.dp)
                             ) {
                                 Text(
                                     text = "Belum ada riwayat komisi untuk ${deliveries.size} pengiriman & ${notifications.size} notifikasi.",
                                     fontSize = 13.sp,
-                                    color = KubeTextMuted
+                                    color = Color(0xFF1E3A4C)
                                 )
                             }
                         } else {
@@ -476,20 +449,23 @@ fun WalletScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         if (withdrawalList.isEmpty()) {
-                            LiquidGlassCard(
+                            KubeGlassCard(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(18.dp),
-                                elevation = 2.dp
+                                contentPadding = PaddingValues(16.dp)
                             ) {
                                 Text(
                                     text = "Belum ada pengajuan pencairan dana.",
                                     fontSize = 13.sp,
-                                    color = KubeTextMuted
+                                    color = Color(0xFF1E3A4C)
                                 )
                             }
                         } else {
                             withdrawalList.forEach { withdrawal ->
-                                WithdrawalHistoryCard(item = withdrawal)
+                                WithdrawalHistoryCard(
+                                    item = withdrawal,
+                                    onClick = { selectedWithdrawalDetail = withdrawal }
+                                )
                             }
                         }
                     }
@@ -498,91 +474,23 @@ fun WalletScreen(
         }
 
         // ==========================================
-        // DIALOG: PERUBAHAN REKENING HARUS MELALUI VERIFIKASI ADMIN (RULE 4)
+        // BOTTOM SHEET: AJUKAN PERUBAHAN REKENING KE SUPABASE
         // ==========================================
-        if (showEditAccountDialog) {
-            AlertDialog(
-                onDismissRequest = { showEditAccountDialog = false },
-                icon = {
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE0F2FE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Lock,
-                            contentDescription = "Terkunci",
-                            tint = Color(0xFF0284C7),
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                },
-                title = {
-                    Text(
-                        text = "Keamanan Rekening",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = KubeTextDark,
-                        textAlign = TextAlign.Center
+        if (showBankChangeSheet) {
+            val initialBank = primaryBank?.bankName?.takeIf { it.isNotBlank() && it != "-" }
+                ?: courier.bankName
+            val initialHolder = primaryBank?.accountHolder?.takeIf { it.isNotBlank() && it != "-" }
+                ?: courier.bankAccountHolder
+            BankAccountChangeBottomSheet(
+                initialBankName = initialBank,
+                initialAccountHolder = initialHolder,
+                onDismiss = { showBankChangeSheet = false },
+                onSubmitSuccess = { created ->
+                    showBankChangeSheet = false
+                    KubeFeedbackManager.showSuccess(
+                        "Pengajuan Rekening Terkirim",
+                        "Data rekening ${created.bankName} berhasil dikirim dan menunggu verifikasi Admin."
                     )
-                },
-                text = {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFFFEF3C7),
-                            border = BorderStroke(1.dp, Color(0xFFFDE68A)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Info,
-                                    contentDescription = null,
-                                    tint = Color(0xFFD97706),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Perubahan rekening harus melalui verifikasi Admin",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF92400E)
-                                )
-                            }
-                        }
-
-                        Text(
-                            text = "Demi melindungi dana dan integritas akun kurir, rekening bank yang telah didaftarkan tidak dapat diubah secara mandiri. Silakan hubungi admin operasional Kube dengan melampirkan foto buku tabungan baru untuk verifikasi identitas.",
-                            fontSize = 13.sp,
-                            color = KubeTextMuted,
-                            lineHeight = 18.sp
-                        )
-
-                        Text(
-                            text = "Rekening aktif saat ini: BCA • ${maskAccountNumber(courier.bankAccountNumber)} (a.n. ${courier.bankAccountHolder})",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = KubeTextDark
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = { showEditAccountDialog = false },
-                        colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.testTag("btn_close_edit_dialog")
-                    ) {
-                        Text("Mengerti", fontWeight = FontWeight.Bold)
-                    }
                 }
             )
         }
@@ -609,30 +517,37 @@ fun WalletScreen(
                     if (result.isSuccess) {
                         showWithdrawDialog = false
                         selectedTab = 1 // Switch to Riwayat Pencairan to show new status
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar(
-                                "Pengajuan penarikan dana berhasil dikirim. Admin akan memproses transfer Anda segera."
-                            )
-                        }
+                        KubeFeedbackManager.showSuccess(
+                            "Penarikan Dana Diajukan",
+                            "Pengajuan pencairan sebesar ${formatRupiah(amount)} sedang diproses Admin."
+                        )
                     } else {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar(
-                                result.exceptionOrNull()?.message ?: "Gagal mengirim pengajuan penarikan dana."
-                            )
-                        }
+                        KubeFeedbackManager.showError(
+                            "Penarikan Dana Gagal",
+                            result.exceptionOrNull()?.message ?: "Gagal mengirim pengajuan penarikan dana."
+                        )
                     }
                     result
                 }
             )
         }
 
-        // Snackbar Host
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 90.dp, start = 16.dp, end = 16.dp)
-        )
+        // ==========================================
+        // BOTTOM SHEET: RINCIAN & BUKTI TRANSFER PENCAIRAN
+        // ==========================================
+        selectedWithdrawalDetail?.let { detailItem ->
+            WithdrawalDetailBottomSheet(
+                item = detailItem,
+                onDismiss = { selectedWithdrawalDetail = null },
+                onConfirmedSuccess = {
+                    selectedWithdrawalDetail = null
+                    KubeFeedbackManager.showSuccess(
+                        "Pencairan Terverifikasi",
+                        "Dana penarikan telah dikonfirmasi masuk ke rekening Anda."
+                    )
+                }
+            )
+        }
     }
 }
 
@@ -646,39 +561,30 @@ private fun BalanceMetricCard(
     statusHint: String,
     icon: ImageVector,
     accentColor: Color,
-    containerColor: Color,
-    borderColor: Color,
+    isHighlighted: Boolean,
     tag: String,
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    KubeGlassCard(
         modifier = modifier.testTag(tag),
-        shape = RoundedCornerShape(18.dp),
-        color = containerColor.copy(alpha = 0.85f),
-        border = BorderStroke(1.5.dp, borderColor)
+        shape = RoundedCornerShape(20.dp),
+        isHighlighted = isHighlighted,
+        contentPadding = PaddingValues(12.dp)
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.Start
         ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = accentColor,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
+            KubeGlassIconBox(
+                icon = icon,
+                contentDescription = title,
+                tint = accentColor,
+                isHighlighted = isHighlighted,
+                boxSize = 36.dp,
+                iconSize = 18.dp
+            )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Text(
                 text = title,
@@ -691,23 +597,17 @@ private fun BalanceMetricCard(
 
             Spacer(modifier = Modifier.height(2.dp))
 
-            Text(
+            DbCurrencyOrMetricText(
                 text = amountText,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = KubeTextDark,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                fontSize = 14.sp,
+                color = KubePrimaryText
             )
 
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            Text(
+            KubeGlassPill(
                 text = statusHint,
-                fontSize = 9.sp,
-                color = KubeTextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                textColor = accentColor
             )
         }
     }
@@ -729,26 +629,27 @@ private fun WalletTabPill(
     val contentColor = if (isSelected) Color.White else KubeTextDark
     val countBgColor = if (isSelected) Color.White.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.08f)
 
-    Surface(
+    Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(containerColor)
             .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 10.dp)
             .testTag(tag),
-        shape = RoundedCornerShape(12.dp),
-        color = containerColor
+        contentAlignment = Alignment.Center
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 10.dp, horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = title,
-                fontSize = 13.sp,
+                fontSize = 12.sp,
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                color = contentColor
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Spacer(modifier = Modifier.width(6.dp))
             Box(
@@ -775,16 +676,12 @@ private fun WalletTabPill(
  */
 @Composable
 private fun CommissionHistoryCard(item: CommissionHistoryItem) {
-    LiquidGlassCard(
+    KubeGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("commission_card_${item.id}"),
-        shape = RoundedCornerShape(18.dp),
-        elevation = 3.dp,
-        fillAlphaTop = 0.50f,
-        fillAlphaBottom = 0.25f,
-        borderAlphaTop = 0.90f,
-        borderAlphaBottom = 0.35f
+        shape = RoundedCornerShape(20.dp),
+        contentPadding = PaddingValues(16.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -795,80 +692,61 @@ private fun CommissionHistoryCard(item: CommissionHistoryItem) {
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (item.isTip) Color(0xFFECFDF5) else Color(0xFFEFF6FF)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (item.isTip) Icons.Filled.ThumbUp else Icons.Filled.LocalShipping,
-                        contentDescription = null,
-                        tint = if (item.isTip) Color(0xFF059669) else Color(0xFF0284C7),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                KubeGlassIconBox(
+                    icon = if (item.isTip) Icons.Filled.ThumbUp else Icons.Filled.LocalShipping,
+                    contentDescription = null,
+                    tint = if (item.isTip) Color(0xFF059669) else Color(0xFF0284C7),
+                    boxSize = 42.dp,
+                    iconSize = 20.dp
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                Column {
-                    Text(
+                Column(modifier = Modifier.weight(1f)) {
+                    DbTitleText(
                         text = item.title,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = KubeTextDark
+                        maxLines = 1
                     )
                     Spacer(modifier = Modifier.height(2.dp))
-                    Text(
+                    DbBodyText(
                         text = item.subtitle,
-                        fontSize = 11.sp,
-                        color = KubeTextMuted
+                        maxLines = 1,
+                        color = Color(0xFF1E3A4C)
                     )
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = Color(0xFFE8F5E9),
-                border = BorderStroke(1.dp, Color(0xFFC8E6C9))
-            ) {
-                Text(
-                    text = "+ ${formatRupiah(item.amount)}",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF2E7D32),
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-            }
+            Spacer(modifier = Modifier.width(12.dp))
+
+            KubeGlassPill(
+                text = "+ ${formatRupiah(item.amount)}",
+                textColor = Color(0xFF2E7D32)
+            )
         }
     }
 }
 
 /**
  * Card for Rule 3: Status Pencairan (Withdrawal)
- * Color Badges:
- * - Menunggu: Kuning (Container 0xFFFEF3C7, Text 0xFFD97706, Border 0xFFFDE68A)
- * - Diproses: Biru (Container 0xFFE0F2FE, Text 0xFF0284C7, Border 0xFFBAE6FD)
- * - Berhasil: Hijau (Container 0xFFD1FAE5, Text 0xFF059669, Border 0xFFA7F3D0)
- * - Ditolak: Merah (Container 0xFFFEE2E2, Text 0xFFDC2626, Border 0xFFFECACA), with reason underneath.
  */
 @Composable
-private fun WithdrawalHistoryCard(item: WithdrawalHistoryItem) {
-    LiquidGlassCard(
+private fun WithdrawalHistoryCard(
+    item: WithdrawalHistoryItem,
+    onClick: () -> Unit = {}
+) {
+    val hasProof = !item.transferProofUrl.isNullOrBlank() && item.transferProofUrl != "null"
+
+    KubeGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("withdrawal_card_${item.id}"),
-        shape = RoundedCornerShape(18.dp),
-        elevation = 3.dp,
-        fillAlphaTop = 0.52f,
-        fillAlphaBottom = 0.28f,
-        borderAlphaTop = 0.90f,
-        borderAlphaBottom = 0.35f
+        shape = RoundedCornerShape(20.dp),
+        contentPadding = PaddingValues(16.dp),
+        onClick = onClick
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -878,38 +756,31 @@ private fun WithdrawalHistoryCard(item: WithdrawalHistoryItem) {
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE0F2FE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AccountBalance,
-                            contentDescription = null,
-                            tint = Color(0xFF0D47A1),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.AccountBalance,
+                        contentDescription = null,
+                        tint = Color(0xFF0D47A1),
+                        boxSize = 42.dp,
+                        iconSize = 20.dp
+                    )
 
                     Spacer(modifier = Modifier.width(12.dp))
 
-                    Column {
-                        Text(
+                    Column(modifier = Modifier.weight(1f)) {
+                        DbTitleText(
                             text = "Penarikan ${item.id}",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = KubeTextDark
+                            maxLines = 1
                         )
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
+                        DbBodyText(
                             text = "${item.bankName} (${item.accountNumberMasked}) • ${item.date}",
-                            fontSize = 11.sp,
-                            color = KubeTextMuted
+                            maxLines = 1,
+                            color = Color(0xFF1E3A4C)
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.width(12.dp))
 
                 // Withdrawal Status Badge
                 WithdrawalStatusBadge(status = item.status)
@@ -923,32 +794,31 @@ private fun WithdrawalHistoryCard(item: WithdrawalHistoryItem) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
+                DbBodyText(
                     text = "Nominal Ditransfer",
-                    fontSize = 12.sp,
-                    color = KubeTextMuted
+                    color = Color(0xFF1E3A4C),
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
                 )
-                Text(
+                Spacer(modifier = Modifier.width(12.dp))
+                DbCurrencyOrMetricText(
                     text = formatRupiah(item.amount),
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = KubeTextDark
+                    color = KubePrimaryText
                 )
             }
 
             // If REJECTED, display explicit rejection reason underneath (Rule 3)
             if (item.status == WithdrawalStatus.REJECTED && item.rejectionReason != null) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Color(0xFFFEF2F2),
-                    border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                KubeGlassCard(
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("rejection_reason_box_${item.id}")
                 ) {
                     Row(
-                        modifier = Modifier.padding(10.dp),
                         verticalAlignment = Alignment.Top
                     ) {
                         Icon(
@@ -978,70 +848,35 @@ private fun WithdrawalHistoryCard(item: WithdrawalHistoryItem) {
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = Color(0xFFCBD5E1).copy(alpha = 0.45f))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = if (hasProof) "Lihat Bukti Transfer & Rincian >" else "Lihat Rincian Pengajuan >",
+                fontSize = 12.sp,
+                fontWeight = if (hasProof) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (hasProof) Color(0xFF0284C7) else Color(0xFF1E3A4C),
+                modifier = Modifier.testTag("withdrawal_hint_${item.id}")
+            )
         }
     }
 }
 
-/**
- * Status Badge for Withdrawal states:
- * - Menunggu: Kuning (Container 0xFFFEF3C7, Text 0xFFD97706, Border 0xFFFDE68A)
- * - Diproses: Biru (Container 0xFFE0F2FE, Text 0xFF0284C7, Border 0xFFBAE6FD)
- * - Berhasil: Hijau (Container 0xFFD1FAE5, Text 0xFF059669, Border 0xFFA7F3D0)
- * - Ditolak: Merah (Container 0xFFFEE2E2, Text 0xFFDC2626, Border 0xFFFECACA)
- */
 @Composable
 private fun WithdrawalStatusBadge(status: WithdrawalStatus) {
-    val (bgColor, textColor, borderColor, icon) = when (status) {
-        WithdrawalStatus.WAITING -> Quadruple(
-            Color(0xFFFEF3C7), // Kuning
-            Color(0xFFD97706),
-            Color(0xFFFDE68A),
-            Icons.Filled.AccessTime
-        )
-        WithdrawalStatus.PROCESSING -> Quadruple(
-            Color(0xFFE0F2FE), // Biru
-            Color(0xFF0284C7),
-            Color(0xFFBAE6FD),
-            Icons.Filled.Sync
-        )
-        WithdrawalStatus.SUCCESS -> Quadruple(
-            Color(0xFFD1FAE5), // Hijau
-            Color(0xFF059669),
-            Color(0xFFA7F3D0),
-            Icons.Filled.CheckCircle
-        )
-        WithdrawalStatus.REJECTED -> Quadruple(
-            Color(0xFFFEE2E2), // Merah
-            Color(0xFFDC2626),
-            Color(0xFFFECACA),
-            Icons.Filled.ErrorOutline
-        )
+    val textColor = when (status) {
+        WithdrawalStatus.WAITING -> Color(0xFFD97706)
+        WithdrawalStatus.PROCESSING -> Color(0xFF1D4ED8)
+        WithdrawalStatus.SUCCESS -> Color(0xFF059669)
+        WithdrawalStatus.REJECTED -> Color(0xFFDC2626)
     }
 
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = bgColor,
-        border = BorderStroke(1.dp, borderColor)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = textColor,
-                modifier = Modifier.size(12.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = status.label,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = textColor
-            )
-        }
-    }
+    KubeGlassPill(
+        text = status.label,
+        textColor = textColor
+    )
 }
 
 /**
@@ -1088,20 +923,14 @@ private fun WithdrawalModalBottomSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFE0F2FE)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.AccountBalance,
-                        contentDescription = null,
-                        tint = Color(0xFF0284C7),
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
+                KubeGlassIconBox(
+                    icon = Icons.Filled.AccountBalance,
+                    contentDescription = null,
+                    tint = Color(0xFF0284C7),
+                    isHighlighted = true,
+                    boxSize = 48.dp,
+                    iconSize = 24.dp
+                )
                 Spacer(modifier = Modifier.width(14.dp))
                 Column {
                     Text(
@@ -1119,73 +948,55 @@ private fun WithdrawalModalBottomSheet(
             }
 
             // Rincian Rekening Tujuan (Masking BCA)
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFBAE6FD)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE3F2FD)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AccountBalance,
-                            contentDescription = "BCA",
-                            tint = Color(0xFF0D47A1),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.AccountBalance,
+                        contentDescription = "BCA",
+                        tint = Color(0xFF0D47A1),
+                        boxSize = 40.dp,
+                        iconSize = 20.dp
+                    )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Rekening Tujuan Transfer (BCA)",
                             fontSize = 11.sp,
-                            color = KubeTextMuted
+                            color = Color(0xFF1E3A4C)
                         )
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "BCA • $bankAccountMasked",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = KubeTextDark
-                        )
+                        DbTitleText(text = "BCA • $bankAccountMasked")
                         Spacer(modifier = Modifier.height(1.dp))
-                        Text(
+                        DbBodyText(
                             text = "a.n. $accountHolder",
-                            fontSize = 12.sp,
-                            color = Color(0xFF0284C7),
-                            fontWeight = FontWeight.SemiBold
+                            maxLines = 1,
+                            color = Color(0xFF0284C7)
                         )
                     }
-                    Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFE8F5E9)) {
-                        Text(
-                            text = "Terdaftar",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF2E7D32),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    KubeGlassPill(
+                        text = "Terdaftar",
+                        textColor = Color(0xFF2E7D32)
+                    )
                 }
             }
 
             // Batas Saldo Info
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFECFDF5),
-                border = BorderStroke(1.dp, Color(0xFFA7F3D0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(14.dp),
+                isHighlighted = true,
+                contentPadding = PaddingValues(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
@@ -1195,10 +1006,16 @@ private fun WithdrawalModalBottomSheet(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "Saldo Siap Cair: ${formatRupiah(availableBalance)}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
+                    DbBodyText(
+                        text = "Saldo Siap Cair:",
+                        color = Color(0xFF065F46),
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    DbCurrencyOrMetricText(
+                        text = formatRupiah(availableBalance),
+                        fontSize = 14.sp,
                         color = Color(0xFF065F46)
                     )
                 }
@@ -1220,11 +1037,9 @@ private fun WithdrawalModalBottomSheet(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 isError = errorMessage != null,
                 supportingText = errorMessage?.let { { Text(it, color = Color(0xFFDC2626)) } },
+                textStyle = TextStyle(color = Color(0xFF0F172A), fontSize = 14.sp),
                 shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = KubeBlueBright,
-                    unfocusedBorderColor = Color.LightGray
-                ),
+                colors = kubeLightTextFieldColors(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("input_nominal_penarikan")
@@ -1253,14 +1068,12 @@ private fun WithdrawalModalBottomSheet(
             }
 
             // Notice Manual Admin Transfer
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFFFFBEB),
-                border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(14.dp),
+                contentPadding = PaddingValues(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.Top
                 ) {
                     Icon(
@@ -1350,13 +1163,11 @@ private fun QuickAmountChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFFF1F5F9),
-        border = BorderStroke(1.dp, Color(0xFFCBD5E1))
+    KubeGlassCard(
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 6.dp),
+        onClick = onClick
     ) {
         Text(
             text = label,
@@ -1364,17 +1175,10 @@ private fun QuickAmountChip(
             fontWeight = FontWeight.SemiBold,
             color = KubeTextDark,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(vertical = 6.dp)
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
-
-private data class Quadruple<A, B, C, D>(
-    val first: A,
-    val second: B,
-    val third: C,
-    val fourth: D
-)
 
 private fun formatRupiah(amount: Long): String {
     return "Rp ${"%,d".format(amount).replace(',', '.')}"

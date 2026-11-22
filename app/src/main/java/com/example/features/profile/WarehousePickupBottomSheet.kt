@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Store
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,7 +35,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -42,13 +42,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassIconBox
 import com.example.core.network.CourierSupabaseService
 import com.example.core.network.WarehouseInfo
 import com.example.ui.theme.KubeBlueBright
@@ -96,20 +97,14 @@ fun WarehousePickupBottomSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(46.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE0F2FE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Store,
-                            contentDescription = null,
-                            tint = KubeBlueBright,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.Store,
+                        contentDescription = null,
+                        tint = KubeBlueBright,
+                        isHighlighted = true,
+                        boxSize = 46.dp,
+                        iconSize = 24.dp
+                    )
 
                     Spacer(modifier = Modifier.width(14.dp))
 
@@ -140,30 +135,22 @@ fun WarehousePickupBottomSheet(
             Spacer(modifier = Modifier.height(2.dp))
 
             // 1. Nama Gudang Card
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFF1F5F9)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Store,
-                            contentDescription = null,
-                            tint = KubeBlueBright,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.Store,
+                        contentDescription = null,
+                        tint = KubeBlueBright,
+                        boxSize = 38.dp,
+                        iconSize = 20.dp
+                    )
 
                     Spacer(modifier = Modifier.width(12.dp))
 
@@ -181,30 +168,22 @@ fun WarehousePickupBottomSheet(
             }
 
             // 2. Alamat Lengkap Gudang Card
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Top
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFFEBEE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.LocationOn,
-                            contentDescription = null,
-                            tint = Color(0xFFE53935),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.LocationOn,
+                        contentDescription = null,
+                        tint = Color(0xFFE53935),
+                        boxSize = 38.dp,
+                        iconSize = 20.dp
+                    )
 
                     Spacer(modifier = Modifier.width(12.dp))
 
@@ -222,30 +201,22 @@ fun WarehousePickupBottomSheet(
             }
 
             // 3. Jam Operasional Card
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(14.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE8F5E9)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AccessTime,
-                            contentDescription = null,
-                            tint = Color(0xFF2E7D32),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.AccessTime,
+                        contentDescription = null,
+                        tint = Color(0xFF2E7D32),
+                        boxSize = 38.dp,
+                        iconSize = 20.dp
+                    )
 
                     Spacer(modifier = Modifier.width(12.dp))
 
@@ -263,14 +234,13 @@ fun WarehousePickupBottomSheet(
             }
 
             // Facilities Info Pill
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFF0F9FF),
-                border = BorderStroke(1.dp, Color(0xFFBAE6FD)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(14.dp),
+                isHighlighted = true,
+                contentPadding = PaddingValues(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(

@@ -41,24 +41,24 @@ class DirectionsService private constructor() {
 
     private val _routeEta = MutableStateFlow(
         RouteEta(
-            durationMinutes = 8,
-            durationSeconds = 480,
-            distanceKm = 2.3,
+            durationMinutes = 15,
+            durationSeconds = 900,
+            distanceKm = 2.5,
             trafficCondition = "Lalu Lintas Lancar",
             trafficLevel = TrafficLevel.SMOOTH,
             trafficColorHex = TrafficLevel.SMOOTH.colorHex,
-            formattedEta = "8 menit lagi",
-            nextInstruction = "200m belok kanan ke Jl. Melati",
+            formattedEta = "15 menit lagi",
+            nextInstruction = "Menunggu tujuan pengiriman aktif",
             courierSpeedKmh = 28,
             originLat = -7.4285,
             originLng = 109.2215,
             currentLat = -7.4243,
             currentLng = 109.2302,
-            destLat = -7.4190,
-            destLng = 109.2410,
-            destinationName = "Toko Es Segar",
-            destinationAddress = "Jl. Melati No. 12, Purwokerto",
-            progressFraction = 0.45f
+            destLat = null,
+            destLng = null,
+            destinationName = "Lokasi Pelanggan",
+            destinationAddress = "Menunggu tujuan pengiriman",
+            progressFraction = 0.35f
         )
     )
     val routeEta: StateFlow<RouteEta> = _routeEta.asStateFlow()
@@ -67,10 +67,42 @@ class DirectionsService private constructor() {
         startRealTimeTrafficTicker()
     }
 
+    fun bindActiveOrder(
+        destinationName: String,
+        destinationAddress: String,
+        distanceKm: Double,
+        estimatedMinutes: Int,
+        destLat: Double? = null,
+        destLng: Double? = null
+    ) {
+        val safeMinutes = estimatedMinutes.coerceAtLeast(1)
+        val safeDist = distanceKm.coerceAtLeast(0.1)
+        val current = _routeEta.value
+        val isSameDestination = current.destinationName == destinationName &&
+            current.destinationAddress == destinationAddress &&
+            current.destLat == destLat &&
+            current.destLng == destLng
+
+        if (isSameDestination) return
+
+        _routeEta.value = current.copy(
+            durationMinutes = safeMinutes,
+            durationSeconds = safeMinutes * 60,
+            distanceKm = safeDist,
+            formattedEta = "$safeMinutes menit lagi",
+            destinationName = destinationName.ifBlank { "Pelanggan Kube" },
+            destinationAddress = destinationAddress.ifBlank { "Alamat tujuan pengiriman" },
+            destLat = destLat,
+            destLng = destLng,
+            nextInstruction = "Menuju ${destinationAddress.ifBlank { destinationName }}",
+            progressFraction = 0.40f,
+            lastUpdatedText = "Rute Pelanggan Aktif"
+        )
+    }
+
     /**
-     * Continuous background ticker that simulates real-time traffic updates,
-     * decrements delivery countdown, updates courier position along the route,
-     * and periodically refreshes live estimates.
+     * Continuous background ticker that updates live ETA countdown and route step
+     * based on the active customer's name and address.
      */
     private fun startRealTimeTrafficTicker() {
         scope.launch {
@@ -80,21 +112,21 @@ class DirectionsService private constructor() {
                 val remainingSeconds = (current.durationSeconds - 3).coerceAtLeast(60)
                 val remainingMinutes = (remainingSeconds + 59) / 60
                 val newProgress = (current.progressFraction + 0.015f).coerceAtMost(0.96f)
-                val remainingDist = (current.distanceKm * (1f - newProgress * 0.1f)).coerceAtLeast(0.3)
+                val remainingDist = (current.distanceKm * (1f - newProgress * 0.05f)).coerceAtLeast(0.2)
                 val roundedDist = (remainingDist * 10).roundToInt() / 10.0
 
-                // Dynamic traffic condition variation
                 val (trafficCond, level) = when {
                     remainingMinutes > 6 -> "Lalu Lintas Lancar" to TrafficLevel.SMOOTH
                     remainingMinutes in 4..6 -> "Lalu Lintas Normal" to TrafficLevel.NORMAL
                     else -> "Mendekati Lokasi" to TrafficLevel.SMOOTH
                 }
 
+                val destLabel = current.destinationName.ifBlank { "lokasi pelanggan" }
+                val addrLabel = current.destinationAddress.ifBlank { "tujuan pengiriman" }
                 val nextInstruction = when {
-                    newProgress > 0.85f -> "50m tiba di Toko Es Segar (sisi kiri)"
-                    newProgress > 0.65f -> "120m putar arah masuk Jl. Melati"
-                    newProgress > 0.40f -> "200m belok kanan ke Jl. Melati"
-                    else -> "Lurus terus di Jl. Jend. Soedirman sejauh 800m"
+                    newProgress > 0.85f -> "Mendekati tujuan: $destLabel"
+                    newProgress > 0.60f -> "Arahkan armada menuju $addrLabel"
+                    else -> "Lanjutkan perjalanan ke $destLabel ($roundedDist km)"
                 }
 
                 _routeEta.value = current.copy(

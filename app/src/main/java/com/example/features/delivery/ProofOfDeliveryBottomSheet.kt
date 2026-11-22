@@ -1,8 +1,9 @@
 package com.example.features.delivery
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -11,10 +12,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,18 +28,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Notes
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -45,8 +48,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -63,16 +66,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import androidx.core.content.ContextCompat
+import com.example.core.components.DbBodyText
+import com.example.core.components.DbStatusPill
+import com.example.core.components.DbTitleText
+import com.example.core.components.DbCurrencyOrMetricText
+import com.example.core.components.KubeFeedbackManager
+import com.example.core.components.KubeImageUtils
+import com.example.core.components.KubePrimaryText
+import com.example.core.components.KubeSupabaseImage
+import com.example.core.components.kubeLightTextFieldColors
 import com.example.core.model.DeliveryOrder
 import com.example.core.network.CourierSupabaseService
 import com.example.core.network.OrderPaymentMeta
-import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
 
@@ -91,32 +103,122 @@ import com.example.ui.theme.KubeTextMuted
 fun ProofOfDeliveryBottomSheet(
     order: DeliveryOrder,
     orderMeta: OrderPaymentMeta? = remember(order.id) { CourierSupabaseService.instance.getOrderMeta(order.id) },
+    isOnDuty: Boolean = true,
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     onDismissRequest: () -> Unit,
     onSubmitProof: (
         recipientName: String,
         photoUri: String?,
+        codCashPhotoUri: String?,
         confirmedQuantity: Int,
         notes: String?,
         isCodPaymentConfirmed: Boolean
     ) -> Unit
 ) {
-    var recipientName by remember { mutableStateOf("") }
-    var selectedPhotoUri by remember { mutableStateOf<Uri?>(null) }
-    var confirmedQuantity by remember { mutableIntStateOf(order.defaultQuantity) }
-    var notes by remember { mutableStateOf("") }
-    var hasAttemptedSubmit by remember { mutableStateOf(false) }
+    var recipientName by remember(order.id) { mutableStateOf("") }
+    var selectedPhotoUri by remember(order.id) { mutableStateOf<Uri?>(null) }
+    var codCashPhotoUri by remember(order.id) { mutableStateOf<Uri?>(null) }
+    var confirmedQuantity by remember(order.id) { mutableIntStateOf(order.defaultQuantity) }
+    var notes by remember(order.id) { mutableStateOf("") }
+    var hasAttemptedSubmit by remember(order.id) { mutableStateOf(false) }
     val isCodOrder = orderMeta?.isCodOrder ?: order.isCod
     val codTotalAmount = orderMeta?.totalAmount?.takeIf { it > 0L } ?: order.effectiveTotalAmount
     val codUnitPrice = orderMeta?.unitPrice?.takeIf { it > 0L } ?: order.effectiveUnitPrice
     var isCodCashConfirmed by remember(order.id) { mutableStateOf(false) }
 
-    // Android Zero-permission Photo Picker
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
+    val context = LocalContext.current
+    var pendingCameraTarget by remember(order.id) { mutableStateOf<String?>(null) }
+    var pendingPodCameraUri by remember(order.id) { mutableStateOf<Uri?>(null) }
+    var pendingCodCameraUri by remember(order.id) { mutableStateOf<Uri?>(null) }
+
+    // Camera TakePicture launchers
+    val podCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && pendingPodCameraUri != null) {
+            selectedPhotoUri = pendingPodCameraUri
+        }
+    }
+
+    val codCameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && pendingCodCameraUri != null) {
+            codCashPhotoUri = pendingCodCameraUri
+        }
+    }
+
+    // Runtime CAMERA permission launcher
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        val target = pendingCameraTarget
+        pendingCameraTarget = null
+        if (isGranted) {
+            when (target) {
+                "POD" -> {
+                    val uri = KubeImageUtils.createTempCameraImageUri(context, prefix = "pod_${order.id}")
+                    pendingPodCameraUri = uri
+                    podCameraLauncher.launch(uri)
+                }
+                "COD" -> {
+                    val uri = KubeImageUtils.createTempCameraImageUri(context, prefix = "cod_${order.id}")
+                    pendingCodCameraUri = uri
+                    codCameraLauncher.launch(uri)
+                }
+            }
+        } else {
+            KubeFeedbackManager.showWarning(
+                "Izin Kamera Diperlukan",
+                "Aktifkan izin kamera untuk mengambil foto bukti pengantaran secara langsung."
+            )
+        }
+    }
+
+    val launchCameraForPod: () -> Unit = {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            val uri = KubeImageUtils.createTempCameraImageUri(context, prefix = "pod_${order.id}")
+            pendingPodCameraUri = uri
+            podCameraLauncher.launch(uri)
+        } else {
+            pendingCameraTarget = "POD"
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    val launchCameraForCod: () -> Unit = {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            val uri = KubeImageUtils.createTempCameraImageUri(context, prefix = "cod_${order.id}")
+            pendingCodCameraUri = uri
+            codCameraLauncher.launch(uri)
+        } else {
+            pendingCameraTarget = "COD"
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    // Gallery GetContent launchers
+    val podGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             selectedPhotoUri = uri
+        }
+    }
+
+    val codGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            codCashPhotoUri = uri
         }
     }
 
@@ -219,30 +321,22 @@ fun ProofOfDeliveryBottomSheet(
                     Column(modifier = Modifier.weight(1f)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = order.id,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF0288D1)
+                            DbStatusPill(
+                                text = "#${order.id}",
+                                backgroundColor = Color(0xFFE0F2FE),
+                                textColor = Color(0xFF0284C7)
                             )
-                            Text(
-                                text = "•",
-                                fontSize = 11.sp,
-                                color = KubeTextMuted
-                            )
-                            Text(
+                            DbTitleText(
                                 text = order.customerName,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = KubeTextDark
+                                modifier = Modifier.weight(1f)
                             )
                         }
-                        Text(
+                        Spacer(modifier = Modifier.height(4.dp))
+                        DbBodyText(
                             text = "Pesanan: ${order.itemDescription}",
-                            fontSize = 12.sp,
-                            color = KubeTextMuted
+                            maxLines = 2
                         )
                     }
                 }
@@ -276,10 +370,10 @@ fun ProofOfDeliveryBottomSheet(
                         .border(BorderStroke(1.5.dp, Color(0xFF0096C7).copy(alpha = 0.5f)), RoundedCornerShape(18.dp))
                         .background(Color.White)
                 ) {
-                    AsyncImage(
-                        model = selectedPhotoUri,
+                    KubeSupabaseImage(
+                        imageUrl = selectedPhotoUri?.toString(),
                         contentDescription = "Bukti Foto Es Batu",
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().height(180.dp),
                         contentScale = ContentScale.Crop
                     )
 
@@ -316,16 +410,12 @@ fun ProofOfDeliveryBottomSheet(
                                 contentColor = Color.White,
                                 modifier = Modifier
                                     .size(34.dp)
-                                    .clickable {
-                                        photoPickerLauncher.launch(
-                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                        )
-                                    }
+                                    .clickable { podGalleryLauncher.launch("image/*") }
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Edit,
-                                        contentDescription = "Ubah Foto",
+                                        contentDescription = "Ubah Foto dari Galeri",
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
@@ -351,7 +441,7 @@ fun ProofOfDeliveryBottomSheet(
                     }
                 }
             } else {
-                // Photo Placeholder Card with picker buttons
+                // Photo Placeholder Card with Camera & Gallery buttons
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -363,11 +453,6 @@ fun ProofOfDeliveryBottomSheet(
                             ),
                             RoundedCornerShape(18.dp)
                         )
-                        .clickable {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        }
                         .testTag("upload_photo_container"),
                     color = Color.White.copy(alpha = 0.75f),
                     shape = RoundedCornerShape(18.dp)
@@ -402,52 +487,60 @@ fun ProofOfDeliveryBottomSheet(
                         )
 
                         Text(
-                            text = "Mendukung kamera & galeri foto perangkat",
+                            text = "Mendukung kamera langsung & galeri foto perangkat",
                             fontSize = 11.sp,
                             color = KubeTextMuted
                         )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Button(
-                                onClick = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                shape = RoundedCornerShape(20.dp),
+                                onClick = launchCameraForPod,
+                                shape = RoundedCornerShape(18.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = Color(0xFF0096C7),
                                     contentColor = Color.White
                                 ),
-                                modifier = Modifier.height(38.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("btn_pod_camera")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.PhotoLibrary,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
+                                    imageVector = Icons.Rounded.PhotoCamera,
+                                    contentDescription = "Kamera",
+                                    modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Buka Picker", fontSize = 12.sp)
+                                Text("Kamera", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
 
-                            // Quick test helper for emulator / offline testing
-                            Button(
-                                onClick = {
-                                    // Use a sample asset URI for instant testing
-                                    selectedPhotoUri = Uri.parse("android.resource://com.example/drawable/ic_launcher_foreground")
-                                },
-                                shape = RoundedCornerShape(20.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFE2E8F0),
-                                    contentColor = Color(0xFF1E293B)
+                            OutlinedButton(
+                                onClick = { podGalleryLauncher.launch("image/*") },
+                                shape = RoundedCornerShape(18.dp),
+                                border = BorderStroke(1.2.dp, Color(0xFF0096C7)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = Color.White,
+                                    contentColor = Color(0xFF0096C7)
                                 ),
-                                modifier = Modifier.height(38.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .testTag("btn_pod_gallery")
                             ) {
-                                Text("Gunakan Sampel", fontSize = 12.sp)
+                                Icon(
+                                    imageVector = Icons.Rounded.PhotoLibrary,
+                                    contentDescription = "Galeri",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Galeri", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -509,18 +602,12 @@ fun ProofOfDeliveryBottomSheet(
                 },
                 singleLine = true,
                 textStyle = TextStyle(
-                    color = Color(0xFF1E293B),
+                    color = Color(0xFF0F172A),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium
                 ),
                 shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFF0096C7),
-                    unfocusedBorderColor = Color(0xFFCBD5E1),
-                    errorBorderColor = Color(0xFFE53935),
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White
-                )
+                colors = kubeLightTextFieldColors()
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -556,19 +643,19 @@ fun ProofOfDeliveryBottomSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
-                        Text(
+                    Column(modifier = Modifier.weight(1f)) {
+                        DbTitleText(
                             text = order.itemDescription,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = KubeTextDark
+                            maxLines = 2
                         )
-                        Text(
+                        Spacer(modifier = Modifier.height(2.dp))
+                        DbBodyText(
                             text = "Target pesanan: ${order.defaultQuantity} unit",
-                            fontSize = 11.sp,
+                            maxLines = 1,
                             color = KubeTextMuted
                         )
                     }
+                    Spacer(modifier = Modifier.width(12.dp))
 
                     // Counter Stepper [-] [count] [+]
                     Row(
@@ -668,35 +755,30 @@ fun ProofOfDeliveryBottomSheet(
                 },
                 maxLines = 3,
                 textStyle = TextStyle(
-                    color = Color(0xFF1E293B),
-                    fontSize = 13.sp
+                    color = Color(0xFF0F172A),
+                    fontSize = 14.sp
                 ),
                 shape = RoundedCornerShape(14.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFF0096C7),
-                    unfocusedBorderColor = Color(0xFFCBD5E1),
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White
-                )
+                colors = kubeLightTextFieldColors()
             )
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Khusus pesanan COD: Wajib konfirmasi penerimaan uang tunai sebelum tombol Submit aktif
+            // Khusus pesanan COD: Bukti Penerimaan Uang Tunai (COD) + Foto Bukti + Checkbox
             if (isCodOrder) {
                 val formattedCodTotal = formatPodRupiah(codTotalAmount)
                 val formattedUnitPrice = formatPodRupiah(codUnitPrice)
+                val isCodSectionComplete = codCashPhotoUri != null && isCodCashConfirmed
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { isCodCashConfirmed = !isCodCashConfirmed }
+                        .clip(RoundedCornerShape(18.dp))
                         .testTag("cod_cash_confirmation_card"),
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (isCodCashConfirmed) Color(0xFFE8F5E9) else Color(0xFFFFF8E1),
+                    shape = RoundedCornerShape(18.dp),
+                    color = if (isCodSectionComplete) Color(0xFFE8F5E9) else Color(0xFFFFF8E1),
                     border = BorderStroke(
                         width = 1.2.dp,
-                        color = if (isCodCashConfirmed) Color(0xFF4CAF50) else Color(0xFFF59E0B)
+                        color = if (isCodSectionComplete) Color(0xFF4CAF50) else Color(0xFFF59E0B)
                     )
                 ) {
                     Column(
@@ -705,15 +787,15 @@ fun ProofOfDeliveryBottomSheet(
                             .padding(14.dp)
                     ) {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    .size(34.dp)
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(
-                                        if (isCodCashConfirmed) Color(0xFF2E7D32).copy(alpha = 0.14f)
+                                        if (isCodSectionComplete) Color(0xFF2E7D32).copy(alpha = 0.14f)
                                         else Color(0xFFF59E0B).copy(alpha = 0.18f)
                                     ),
                                 contentAlignment = Alignment.Center
@@ -721,23 +803,213 @@ fun ProofOfDeliveryBottomSheet(
                                 Icon(
                                     imageVector = Icons.Default.Payments,
                                     contentDescription = null,
-                                    tint = if (isCodCashConfirmed) Color(0xFF2E7D32) else Color(0xFFD97706),
+                                    tint = if (isCodSectionComplete) Color(0xFF2E7D32) else Color(0xFFD97706),
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Tagihan Tunai COD",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = KubeTextDark
+                                DbTitleText(
+                                    text = "Bukti Penerimaan Uang Tunai (COD)",
+                                    maxLines = 2
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                DbBodyText(
+                                    text = "${order.itemDescription} ($formattedUnitPrice/unit)",
+                                    maxLines = 2,
+                                    color = if (isCodSectionComplete) Color(0xFF1B5E20) else Color(0xFF92400E)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            DbStatusPill(
+                                text = if (isCodSectionComplete) "Lengkap" else "Wajib",
+                                backgroundColor = if (isCodSectionComplete) Color(0xFFC8E6C9) else Color(0xFFFDE68A),
+                                textColor = if (isCodSectionComplete) Color(0xFF1B5E20) else Color(0xFF92400E)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Ringkasan Nominal Uang Tunai yang Harus Diterima
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.White.copy(alpha = 0.90f),
+                            border = BorderStroke(1.dp, Color(0xFFE2E8F0))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "${order.itemDescription} (${formattedUnitPrice}/unit) · Total $formattedCodTotal",
+                                    text = "Nominal Uang Diterima",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = if (isCodCashConfirmed) Color(0xFF1B5E20) else Color(0xFFB45309)
+                                    color = KubeTextMuted,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                DbCurrencyOrMetricText(
+                                    text = formattedCodTotal,
+                                    color = if (isCodSectionComplete) Color(0xFF1B5E20) else Color(0xFFB45309),
+                                    fontSize = 18.sp
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Input Foto Bukti Uang Tunai COD
+                        Text(
+                            text = "Foto Bukti Uang Tunai COD *",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = KubePrimaryText
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        if (codCashPhotoUri != null) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(145.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .border(1.5.dp, Color(0xFF2E7D32).copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+                                    .background(Color.White)
+                                    .testTag("cod_cash_photo_preview")
+                            ) {
+                                KubeSupabaseImage(
+                                    imageUrl = codCashPhotoUri?.toString(),
+                                    contentDescription = "Foto Bukti Uang Tunai COD",
+                                    modifier = Modifier.fillMaxWidth().height(145.dp),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    DbStatusPill(
+                                        text = "Bukti Uang Terlampir",
+                                        backgroundColor = Color(0xFF2E7D32).copy(alpha = 0.92f),
+                                        textColor = Color.White
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.6f),
+                                            contentColor = Color.White,
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clickable { codGalleryLauncher.launch("image/*") }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "Ubah Foto Uang COD dari Galeri",
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
+                                        }
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.6f),
+                                            contentColor = Color.White,
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clickable { codCashPhotoUri = null }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Hapus Foto Uang COD",
+                                                    modifier = Modifier.size(15.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .border(
+                                        BorderStroke(1.dp, Color(0xFFF59E0B).copy(alpha = 0.55f)),
+                                        RoundedCornerShape(14.dp)
+                                    )
+                                    .testTag("cod_cash_photo_picker"),
+                                shape = RoundedCornerShape(14.dp),
+                                color = Color.White.copy(alpha = 0.90f)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "Lampirkan Foto Uang Tunai yang Diterima",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = KubePrimaryText
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Button(
+                                            onClick = launchCameraForCod,
+                                            shape = RoundedCornerShape(16.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFFD97706),
+                                                contentColor = Color.White
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
+                                                .testTag("btn_cod_camera")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.PhotoCamera,
+                                                contentDescription = "Kamera",
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Kamera", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = { codGalleryLauncher.launch("image/*") },
+                                            shape = RoundedCornerShape(16.dp),
+                                            border = BorderStroke(1.2.dp, Color(0xFFD97706)),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                containerColor = Color.White,
+                                                contentColor = Color(0xFFB45309)
+                                            ),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
+                                                .testTag("btn_cod_gallery")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.PhotoLibrary,
+                                                contentDescription = "Galeri",
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Galeri", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -747,7 +1019,8 @@ fun ProofOfDeliveryBottomSheet(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(Color.White.copy(alpha = 0.85f))
+                                .background(Color.White.copy(alpha = 0.88f))
+                                .clickable { isCodCashConfirmed = !isCodCashConfirmed }
                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                                 .testTag("cod_cash_confirmation_row"),
                             verticalAlignment = Alignment.CenterVertically
@@ -762,13 +1035,13 @@ fun ProofOfDeliveryBottomSheet(
                                     checkmarkColor = Color.White
                                 )
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Saya konfirmasi telah menerima uang tunai sebesar $formattedCodTotal dari pelanggan",
+                                text = "Saya sudah menerima uang tunai COD dan melampirkan foto buktinya",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = KubeTextDark,
-                                lineHeight = 16.sp,
+                                color = KubePrimaryText,
+                                lineHeight = 17.sp,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -797,7 +1070,7 @@ fun ProofOfDeliveryBottomSheet(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Pesanan akan langsung diselesaikan dan otomatis masuk ke tab Riwayat / Selesai.",
+                        text = "Pesanan akan langsung diselesaikan, masuk ke riwayat, dan komisi langsung tercatat ke Saldo Siap Cair.",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF1B5E20),
@@ -806,28 +1079,72 @@ fun ProofOfDeliveryBottomSheet(
                 }
             }
 
-            if (isCodOrder && !isCodCashConfirmed) {
+            val isCodRequirementsMet = !isCodOrder || (
+                selectedPhotoUri != null &&
+                codCashPhotoUri != null &&
+                recipientName.trim().isNotBlank() &&
+                isCodCashConfirmed
+            )
+
+            if (isCodOrder && !isCodRequirementsMet) {
                 Spacer(modifier = Modifier.height(10.dp))
+                val missingItems = buildList {
+                    if (selectedPhotoUri == null) add("foto serah terima es")
+                    if (recipientName.trim().isBlank()) add("nama penerima")
+                    if (codCashPhotoUri == null) add("foto bukti uang COD")
+                    if (!isCodCashConfirmed) add("centang konfirmasi")
+                }.joinToString(", ")
                 Text(
-                    text = "Centang konfirmasi penerimaan uang tunai COD di atas untuk mengaktifkan tombol Submit PoD.",
+                    text = "Lengkapi $missingItems untuk mengaktifkan tombol Submit PoD.",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     color = Color(0xFFB45309)
                 )
             }
 
+            if (!isOnDuty) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFFEF3C7),
+                    border = BorderStroke(1.dp, Color(0xFFF59E0B))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = Color(0xFFD97706),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Submit PoD terkunci karena status Anda sedang Off-Duty. Aktifkan On-Duty untuk menyelesaikan pengiriman.",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF92400E),
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(18.dp))
 
-            val isSubmitEnabled = !isCodOrder || isCodCashConfirmed
+            val isSubmitEnabled = isOnDuty && (!isCodOrder || isCodRequirementsMet)
 
-            // 5. TOMBOL SUBMIT: 'Selesaikan & Kirim PoD'
+            // 5. TOMBOL SUBMIT: 'Submit PoD' / 'Selesaikan Pengiriman'
             Button(
                 onClick = {
                     hasAttemptedSubmit = true
-                    if (recipientName.trim().isNotBlank() && isSubmitEnabled) {
+                    if (isOnDuty && recipientName.trim().isNotBlank() && isSubmitEnabled) {
                         onSubmitProof(
                             recipientName.trim(),
                             selectedPhotoUri?.toString(),
+                            codCashPhotoUri?.toString(),
                             confirmedQuantity,
                             notes.trim().ifBlank { null },
                             isCodCashConfirmed
@@ -848,14 +1165,14 @@ fun ProofOfDeliveryBottomSheet(
                 )
             ) {
                 Icon(
-                    imageVector = Icons.Default.CheckCircle,
+                    imageVector = if (isOnDuty) Icons.Default.CheckCircle else Icons.Default.Lock,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Selesaikan Pengiriman",
-                    fontSize = 15.sp,
+                    text = if (isOnDuty) "Submit PoD" else "Submit PoD · Terkunci (Status Off-Duty)",
+                    fontSize = if (isOnDuty) 15.sp else 13.sp,
                     fontWeight = FontWeight.Bold
                 )
             }

@@ -253,7 +253,7 @@ class OrderRepositoryTest {
         val repo = createSeededRepository()
         repo.updateCourierDuty(false)
         assertEquals(false, repo.courier.value.isActiveDuty)
-        assertEquals("Sedang Istirahat", repo.courier.value.statusText)
+        assertEquals("Sedang Istirahat (Off-Duty)", repo.courier.value.statusText)
 
         repo.updateCourierDuty(true)
         assertEquals(true, repo.courier.value.isActiveDuty)

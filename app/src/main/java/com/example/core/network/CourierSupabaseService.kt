@@ -3,6 +3,7 @@ package com.example.core.network
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.example.core.components.KubeFeedbackManager
 import com.example.core.model.CommissionHistoryItem
 import com.example.core.model.Courier
 import com.example.core.model.DeliveryOrder
@@ -95,12 +96,32 @@ data class OrderPaymentMeta(
     val commissionAmount: Long,
     val isPaid: Boolean,
     val latitude: Double? = null,
-    val longitude: Double? = null
+    val longitude: Double? = null,
+    val recipientName: String = "",
+    val podPhotoUrl: String? = null,
+    val codCashPhotoUrl: String? = null,
+    val podStatus: String = "approved",
+    val deliveredAtFormatted: String = "",
+    val deliveryNotes: String? = null
 ) {
     val isCodOrder: Boolean
         get() = paymentMethodCode.equals("cod", ignoreCase = true) ||
                 paymentMethodName.contains("tunai", ignoreCase = true)
 }
+
+data class ChatMessageRecord(
+    val id: Int,
+    val roomType: String, // "courier_admin" atau "order_chat"
+    val orderId: Int?,
+    val courierUserId: String,
+    val senderId: String,
+    val senderRole: String, // "courier", "admin", "consumer"
+    val senderName: String,
+    val message: String,
+    val isRead: Boolean,
+    val timeLabel: String,
+    val isFromMe: Boolean
+)
 
 class CourierSupabaseService private constructor(
     private val repository: OrderRepository = OrderRepository.instance
@@ -135,9 +156,12 @@ class CourierSupabaseService private constructor(
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val okHttpClient: OkHttpClient get() = sharedOkHttpClient
 
+    @Volatile private var appContext: Context? = null
     @Volatile private var currentAccessToken: String? = null
     @Volatile private var currentUserUuid: String = ""
     @Volatile private var currentCourierProfileId: Int = 0
+
+    private val notifiedIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     private val _activeCourierProfileId = MutableStateFlow<String?>(null)
     val activeCourierProfileId: StateFlow<String?> = _activeCourierProfileId.asStateFlow()
@@ -155,13 +179,25 @@ class CourierSupabaseService private constructor(
     private val _notifications = MutableStateFlow<List<CourierNotificationRecord>>(emptyList())
     val notifications: StateFlow<List<CourierNotificationRecord>> = _notifications.asStateFlow()
 
+    fun initAppContext(context: Context) {
+        appContext = context.applicationContext
+    }
+
     private val _supportContacts = MutableStateFlow<List<SupportContactRecord>>(emptyList())
     val supportContacts: StateFlow<List<SupportContactRecord>> = _supportContacts.asStateFlow()
 
     private val _bankAccounts = MutableStateFlow<List<CourierBankAccountRecord>>(emptyList())
     val bankAccounts: StateFlow<List<CourierBankAccountRecord>> = _bankAccounts.asStateFlow()
 
+    private val _adminChatMessages = MutableStateFlow<List<ChatMessageRecord>>(emptyList())
+    val adminChatMessages: StateFlow<List<ChatMessageRecord>> = _adminChatMessages.asStateFlow()
+
+    private val _orderChatMessages = MutableStateFlow<Map<Int, List<ChatMessageRecord>>>(emptyMap())
+    val orderChatMessages: StateFlow<Map<Int, List<ChatMessageRecord>>> = _orderChatMessages.asStateFlow()
+
     fun getOrderMeta(orderCode: String): OrderPaymentMeta? = orderMetaByCode[orderCode]
+
+    fun getOrderDbId(orderCode: String): Int? = orderMetaByCode[orderCode]?.orderDbId
 
     internal fun cacheOrderMetaForTest(meta: OrderPaymentMeta) {
         orderMetaByCode[meta.orderCode] = meta
@@ -171,16 +207,26 @@ class CourierSupabaseService private constructor(
         _supportContacts.value = contacts
     }
 
-    fun logoutCourier() {
+    internal fun setCurrentUserUuidForTest(userUuid: String) {
+        currentUserUuid = userUuid
+    }
+
+    fun logoutCourier(context: Context? = null) {
+        if (context != null) {
+            CourierSessionStorage.clearSession(context)
+        }
         currentAccessToken = null
         currentUserUuid = ""
         currentCourierProfileId = 0
         _activeCourierProfileId.value = null
         orderMetaByCode.clear()
         deliveryIdByOrderDbId.clear()
+        notifiedIds.clear()
         _notifications.value = emptyList()
         _supportContacts.value = emptyList()
         _bankAccounts.value = emptyList()
+        _adminChatMessages.value = emptyList()
+        _orderChatMessages.value = emptyMap()
         _warehouseInfo.value = WarehouseInfo()
         repository.resetAllData()
     }
@@ -219,7 +265,12 @@ class CourierSupabaseService private constructor(
     // 1. AUTENTIKASI & VALIDASI ROLE KURIR (users + courier_profiles)
     // =========================================================================
 
-    suspend fun loginCourier(email: String, password: String): Result<CourierAuthSession> =
+    suspend fun loginCourier(
+        email: String,
+        password: String,
+        rememberMe: Boolean = false,
+        context: Context? = null
+    ): Result<CourierAuthSession> =
         withContext(Dispatchers.IO) {
             val cleanEmail = email.trim()
             if (cleanEmail.isEmpty() || !cleanEmail.contains("@")) {
@@ -245,20 +296,35 @@ class CourierSupabaseService private constructor(
                 okHttpClient.newCall(authRequest).execute().use { authResponse ->
                     val authBody = authResponse.body?.string().orEmpty()
                     if (!authResponse.isSuccessful || authBody.isBlank()) {
-                        val errorMsg = runCatching {
-                            JSONObject(authBody).optString("error_description")
-                                .ifBlank { JSONObject(authBody).optString("msg") }
-                        }.getOrNull().orEmpty()
-                        return@withContext Result.failure(
-                            IllegalStateException(
-                                if (errorMsg.isNotBlank()) "Login gagal: $errorMsg"
-                                else "Email atau kata sandi kurir salah."
-                            )
-                        )
+                        val encodedEmail = Uri.encode(cleanEmail)
+                        val usersArr = runCatching {
+                            executeGetJsonArray("$SUPABASE_URL/rest/v1/users?select=id,role_id,account_status&email=eq.$encodedEmail")
+                        }.getOrNull()
+
+                        val (errTitle, errMessage) = when {
+                            usersArr == null || usersArr.length() == 0 -> {
+                                "Email Tidak Terdaftar" to "Email '$cleanEmail' belum terdaftar di sistem kurir Kube."
+                            }
+                            else -> {
+                                val uRow = usersArr.optJSONObject(0)
+                                val roleId = uRow?.optInt("role_id", -1) ?: -1
+                                val accStatus = uRow?.optString("account_status", "active").orEmpty()
+                                when {
+                                    roleId != 3 -> "Akses Akun Ditolak" to "Akun ini bukan akun kurir resmi Kube."
+                                    !accStatus.equals("active", ignoreCase = true) ->
+                                        "Akun Dinonaktifkan" to "Status akun Anda saat ini '$accStatus'. Hubungi Admin Kube."
+                                    else -> "Kata Sandi Salah" to "Kata sandi yang Anda masukkan tidak sesuai. Periksa kembali lalu coba lagi."
+                                }
+                            }
+                        }
+
+                        KubeFeedbackManager.showError(errTitle, errMessage)
+                        return@withContext Result.failure(IllegalStateException(errMessage))
                     }
 
                     val json = JSONObject(authBody)
                     val accessToken = json.optString("access_token")
+                    val refreshToken = json.optString("refresh_token")
                     val authUserId = json.optJSONObject("user")?.optString("id").orEmpty()
                     currentAccessToken = accessToken
 
@@ -268,7 +334,18 @@ class CourierSupabaseService private constructor(
                         accessToken = accessToken
                     )
 
-                    if (sessionResult.isSuccess) {
+                    sessionResult.onSuccess { session ->
+                        if (context != null) {
+                            CourierSessionStorage.saveSession(
+                                context = context,
+                                rememberMe = rememberMe,
+                                email = cleanEmail,
+                                accessToken = accessToken,
+                                refreshToken = refreshToken,
+                                userId = session.userId,
+                                courierId = session.courierId
+                            )
+                        }
                         ensureRealtimeSyncStarted()
                         realtimeScope.launch { syncAllTablesOnce() }
                     }
@@ -279,6 +356,71 @@ class CourierSupabaseService private constructor(
                 return@withContext Result.failure(
                     IllegalStateException("Gagal terhubung ke Supabase: ${e.message}")
                 )
+            }
+        }
+
+    /**
+     * Dipanggil saat SplashScreen dibuka:
+     * Jika Remember Me sebelumnya dicentang, memperbarui token via Supabase `refresh_token`
+     * dan langsung masuk ke Dashboard tanpa perlu input email & password ulang.
+     */
+    suspend fun restoreSessionIfRemembered(context: Context): Result<CourierAuthSession> =
+        withContext(Dispatchers.IO) {
+            val saved = CourierSessionStorage.getSavedSession(context)
+                ?: return@withContext Result.failure(IllegalStateException("Tidak ada sesi tersimpan."))
+
+            try {
+                val refreshPayload = JSONObject().apply {
+                    put("refresh_token", saved.refreshToken)
+                }.toString()
+
+                val req = Request.Builder()
+                    .url("$SUPABASE_URL/auth/v1/token?grant_type=refresh_token")
+                    .addHeader("apikey", SUPABASE_ANON_KEY)
+                    .addHeader("Content-Type", "application/json")
+                    .post(refreshPayload.toRequestBody(jsonMediaType))
+                    .build()
+
+                okHttpClient.newCall(req).execute().use { res ->
+                    val body = res.body?.string().orEmpty()
+                    if (!res.isSuccessful || body.isBlank()) {
+                        CourierSessionStorage.clearSession(context)
+                        return@withContext Result.failure(IllegalStateException("Sesi berakhir, silakan login ulang."))
+                    }
+
+                    val json = JSONObject(body)
+                    val newAccessToken = json.optString("access_token")
+                    val newRefreshToken = json.optString("refresh_token").ifBlank { saved.refreshToken }
+                    val authUserId = json.optJSONObject("user")?.optString("id").orEmpty().ifBlank { saved.userId }
+                    currentAccessToken = newAccessToken
+
+                    val sessionResult = fetchAndValidateCourierProfile(
+                        email = saved.email,
+                        authUserId = authUserId,
+                        accessToken = newAccessToken
+                    )
+
+                    sessionResult.onSuccess { session ->
+                        CourierSessionStorage.saveSession(
+                            context = context,
+                            rememberMe = true,
+                            email = saved.email,
+                            accessToken = newAccessToken,
+                            refreshToken = newRefreshToken,
+                            userId = session.userId,
+                            courierId = session.courierId
+                        )
+                        ensureRealtimeSyncStarted()
+                        realtimeScope.launch { syncAllTablesOnce() }
+                    }.onFailure {
+                        CourierSessionStorage.clearSession(context)
+                    }
+
+                    return@withContext sessionResult
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "restoreSessionIfRemembered error: ${e.message}")
+                return@withContext Result.failure(e)
             }
         }
 
@@ -461,6 +603,20 @@ class CourierSupabaseService private constructor(
                     put("status", if (isOnDuty) "available" else "offline")
                 }.toString()
                 executePatch("$SUPABASE_URL/rest/v1/courier_profiles?id=eq.$profileId", payload)
+            }
+            if (isOnDuty) {
+                realtimeScope.launch {
+                    runCatching { syncAllTablesOnce() }
+                }
+                KubeFeedbackManager.showSuccess(
+                    "Status Aktif (On-Duty)",
+                    "Anda kini siap menerima dan memproses tugas pengantaran."
+                )
+            } else {
+                KubeFeedbackManager.showWarning(
+                    "Mode Istirahat (Off-Duty)",
+                    "Penerimaan tugas baru dan aksi pengantaran dikunci sementara."
+                )
             }
             Result.success(isOnDuty)
         } catch (e: Exception) {
@@ -657,10 +813,6 @@ class CourierSupabaseService private constructor(
             if (deliveryObj != null) {
                 val dId = deliveryObj.optInt("id", 0)
                 if (dId > 0) deliveryIdByOrderDbId[orderDbId] = dId
-                val dbComm = deliveryObj.optDouble("commission_amount", 0.0).toLong()
-                if (dbComm > 0L) {
-                    orderMetaByCode[orderCode] = meta.copy(commissionAmount = dbComm)
-                }
             }
 
             val rawStatus = deliveryObj?.optString("status").takeIf { !it.isNullOrBlank() && it != "null" }
@@ -675,15 +827,54 @@ class CourierSupabaseService private constructor(
 
             val recipient = deliveryObj?.optString("recipient_name").takeIf { !it.isNullOrBlank() && it != "null" }.orEmpty()
             val podUrl = deliveryObj?.optString("pod_photo_url").takeIf { !it.isNullOrBlank() && it != "null" }
-            val dNotes = deliveryObj?.optString("delivery_notes").takeIf { !it.isNullOrBlank() && it != "null" }
-                ?: row.optString("notes").takeIf { !it.isNullOrBlank() && it != "null" }
+            val rawNotes = deliveryObj?.optString("delivery_notes")
+                ?.takeIf { it.isNotBlank() && it != "null" }
+                ?: row.optString("notes")?.takeIf { it.isNotBlank() && it != "null" }
+
+            // Ambil URL bukti uang COD dari kolom `proof_photo_path` atau dari teks catatan lama
+            val proofPathCol = deliveryObj?.optString("proof_photo_path")
+                ?.takeIf { it.isNotBlank() && it != "null" }
+            val urlInNotesRegex = Regex("""Bukti Uang COD:\s*(https?://\S+)""")
+            val extractedCodUrlFromNotes = rawNotes?.let { urlInNotesRegex.find(it)?.groupValues?.getOrNull(1) }
+
+            val resolvedCodPhotoUrl = when {
+                !extractedCodUrlFromNotes.isNullOrBlank() -> extractedCodUrlFromNotes
+                !proofPathCol.isNullOrBlank() && proofPathCol != podUrl -> proofPathCol
+                meta.isCodOrder && !proofPathCol.isNullOrBlank() -> proofPathCol
+                else -> null
+            }
+
+            // Hapus teks mentah "Bukti Uang COD: https://..." dari catatan agar Catatan Pengantaran bersih
+            val cleanedNotes = rawNotes
+                ?.replace(Regex("""\|?\s*Bukti Uang COD:\s*https?://\S+"""), "")
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+
+            val deliveredAtStr = deliveryObj?.optString("delivered_at")
+                ?.takeIf { it.isNotBlank() && it != "null" }
+                ?.let { formatTimestampShort(it) }
+                ?: formatTimestampShort(row.optString("updated_at"))
+
+            val finalCommission = deliveryObj?.optDouble("commission_amount", 0.0)?.toLong()
+                ?.takeIf { it > 0L } ?: totalCommission.coerceAtLeast(1000L)
+
+            orderMetaByCode[orderCode] = meta.copy(
+                commissionAmount = finalCommission,
+                recipientName = recipient.ifBlank { customerName },
+                podPhotoUrl = podUrl,
+                codCashPhotoUrl = resolvedCodPhotoUrl,
+                podStatus = deliveryObj?.optString("pod_status", "approved")
+                    ?.takeIf { it.isNotBlank() && it != "null" } ?: "approved",
+                deliveredAtFormatted = deliveredAtStr,
+                deliveryNotes = cleanedNotes
+            )
 
             val pod = if (recipient.isNotBlank() || !podUrl.isNullOrBlank()) {
                 ProofOfDelivery(
                     recipientName = recipient.ifBlank { customerName },
                     photoUri = podUrl,
                     confirmedQuantity = itemsArr?.optJSONObject(0)?.optInt("quantity", 1) ?: 1,
-                    notes = dNotes
+                    notes = cleanedNotes
                 )
             } else null
 
@@ -705,7 +896,7 @@ class CourierSupabaseService private constructor(
                         formatTimestampShort(row.optString("updated_at")) else null,
                     deliveredTime = deliveryObj?.optString("delivered_at").takeIf { !it.isNullOrBlank() && it != "null" }
                         ?.let { formatTimestampShort(it) },
-                    notes = dNotes,
+                    notes = cleanedNotes,
                     proofOfDelivery = pod,
                     paymentMethod = meta.paymentMethodCode,
                     totalAmount = meta.totalAmount,
@@ -736,6 +927,11 @@ class CourierSupabaseService private constructor(
         orderId: String,
         newStatus: DeliveryStatus
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!repository.courier.value.isActiveDuty) {
+            return@withContext Result.failure(
+                IllegalStateException("Status Anda sedang Off-Duty. Aktifkan On-Duty terlebih dahulu untuk memproses pengantaran.")
+            )
+        }
         try {
             repository.updateOrderStatus(orderId, newStatus)
             val meta = orderMetaByCode[orderId] ?: return@withContext Result.success(Unit)
@@ -795,6 +991,11 @@ class CourierSupabaseService private constructor(
         context: Context? = null,
         isCodCollected: Boolean = true
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!repository.courier.value.isActiveDuty) {
+            return@withContext Result.failure(
+                IllegalStateException("Status Anda sedang Off-Duty. Aktifkan On-Duty terlebih dahulu untuk menyelesaikan pengiriman.")
+            )
+        }
         try {
             val meta = orderMetaByCode[orderId]
             val orderDbId = meta?.orderDbId ?: 0
@@ -839,15 +1040,9 @@ class CourierSupabaseService private constructor(
                 }.toString()
                 executePatch("$SUPABASE_URL/rest/v1/orders?id=eq.$orderDbId", orderPayload)
 
-                val combinedNotes = buildString {
-                    if (!notes.isNullOrBlank()) append(notes.trim())
-                    if (uploadedCodCashUrl.isNotBlank()) {
-                        if (isNotEmpty()) append(" | ")
-                        append("Bukti Uang COD: $uploadedCodCashUrl")
-                    }
-                }.ifBlank { null }
+                val cleanNotes = notes?.trim()?.takeIf { it.isNotBlank() }
 
-                // 4. Upsert `deliveries` (simpan foto bukti serah terima & bukti uang COD)
+                // 4. Upsert `deliveries` (simpan foto bukti serah terima & bukti uang COD secara terpisah)
                 val deliveryDbId = upsertDeliveryRow(
                     orderDbId = orderDbId,
                     status = "delivered",
@@ -855,7 +1050,7 @@ class CourierSupabaseService private constructor(
                     podPhotoUrl = uploadedPhotoUrl,
                     codCashPhotoUrl = uploadedCodCashUrl.ifBlank { null },
                     recipientName = recipientName.trim(),
-                    deliveryNotes = combinedNotes
+                    deliveryNotes = cleanNotes
                 )
 
                 // 5. Log & Komisi langsung masuk ke Saldo Siap Cair (available)
@@ -863,7 +1058,7 @@ class CourierSupabaseService private constructor(
                     insertDeliveryLog(
                         deliveryId = deliveryDbId,
                         status = "delivered",
-                        notes = "Diterima oleh ${recipientName.trim()} ($confirmedQuantity unit). ${combinedNotes.orEmpty()}".trim()
+                        notes = "Diterima oleh ${recipientName.trim()} ($confirmedQuantity unit). ${cleanNotes.orEmpty()}".trim()
                     )
 
                     if (currentCourierProfileId > 0 && commissionAmt > 0) {
@@ -894,33 +1089,32 @@ class CourierSupabaseService private constructor(
         context: Context?
     ): String? {
         return runCatching {
-            val bytes: ByteArray? = when {
-                photoUriString.startsWith("http://") || photoUriString.startsWith("https://") -> return photoUriString
-                photoUriString.startsWith("content://") && context != null -> {
-                    context.contentResolver.openInputStream(Uri.parse(photoUriString))?.use { it.readBytes() }
-                }
-                photoUriString.startsWith("file://") -> {
-                    File(Uri.parse(photoUriString).path.orEmpty()).takeIf { it.exists() }?.readBytes()
-                }
-                else -> File(photoUriString).takeIf { it.exists() }?.readBytes()
+            if (photoUriString.startsWith("http://") || photoUriString.startsWith("https://")) {
+                return photoUriString
             }
 
-            if (bytes == null || bytes.isEmpty()) return null
+            // Konversi gambar format apa pun (JPG/PNG/WEBP/HEIC) menjadi file SVG (.svg)
+            val svgBytes = com.example.core.components.KubeImageUtils.convertAnyImageToSvgBytes(
+                context = context,
+                photoUriString = photoUriString
+            ) ?: return null
+
+            val svgFileName = fileName.substringBeforeLast(".") + ".svg"
 
             val uploadReq = Request.Builder()
-                .url("$SUPABASE_URL/storage/v1/object/$POD_STORAGE_BUCKET/$fileName")
+                .url("$SUPABASE_URL/storage/v1/object/$POD_STORAGE_BUCKET/$svgFileName")
                 .addHeader("apikey", SUPABASE_ANON_KEY)
                 .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
-                .addHeader("Content-Type", "image/jpeg")
+                .addHeader("Content-Type", "image/svg+xml")
                 .addHeader("x-upsert", "true")
-                .post(bytes.toRequestBody("image/jpeg".toMediaType()))
+                .post(svgBytes.toRequestBody("image/svg+xml".toMediaType()))
                 .build()
 
             okHttpClient.newCall(uploadReq).execute().use { res ->
                 if (res.isSuccessful) {
-                    "$SUPABASE_URL/storage/v1/object/public/$POD_STORAGE_BUCKET/$fileName"
+                    "$SUPABASE_URL/storage/v1/object/public/$POD_STORAGE_BUCKET/$svgFileName"
                 } else {
-                    Log.w(TAG, "Storage upload failed (${res.code}): ${res.body?.string()}")
+                    Log.w(TAG, "SVG upload failed (${res.code}): ${res.body?.string()}")
                     null
                 }
             }
@@ -1030,6 +1224,108 @@ class CourierSupabaseService private constructor(
         }
     }
 
+    /**
+     * Mengirim pengajuan rekening baru / perubahan rekening kurir ke tabel `public.courier_bank_accounts`.
+     * Mendukung unggah foto buku tabungan opsional ke Supabase Storage.
+     */
+    suspend fun submitBankAccountRequest(
+        bankName: String,
+        accountNumber: String,
+        accountHolder: String,
+        passbookPhotoUri: String? = null,
+        context: Context? = null
+    ): Result<CourierBankAccountRecord> = withContext(Dispatchers.IO) {
+        val cleanBank = bankName.trim()
+        val cleanNumber = accountNumber.trim()
+        val cleanHolder = accountHolder.trim()
+
+        if (cleanBank.isEmpty() || cleanNumber.isEmpty() || cleanHolder.isEmpty()) {
+            return@withContext Result.failure(
+                IllegalArgumentException("Nama bank, nomor rekening, dan nama pemilik wajib diisi.")
+            )
+        }
+
+        if (currentCourierProfileId <= 0 && currentUserUuid.isNotBlank()) {
+            fetchAndSyncCourierProfileByUuid(currentUserUuid)
+        }
+        if (currentCourierProfileId <= 0) {
+            return@withContext Result.failure(
+                IllegalStateException("Profil kurir belum terhubung. Pastikan akun terdaftar di courier_profiles.")
+            )
+        }
+
+        try {
+            // 1. Upload foto buku tabungan jika kurir melampirkannya
+            val uploadedPassbookUrl = if (!passbookPhotoUri.isNullOrBlank()) {
+                uploadPhotoToSupabaseStorage(
+                    photoUriString = passbookPhotoUri,
+                    fileName = "passbook_${currentCourierProfileId}_${System.currentTimeMillis()}.jpg",
+                    context = context
+                ) ?: passbookPhotoUri
+            } else {
+                null
+            }
+
+            // 2. Nonaktifkan status `is_primary` pada rekening lama milik kurir ini
+            val resetPrimaryPayload = JSONObject().apply {
+                put("is_primary", false)
+            }.toString()
+            executePatch(
+                "$SUPABASE_URL/rest/v1/courier_bank_accounts?courier_id=eq.$currentCourierProfileId",
+                resetPrimaryPayload
+            )
+
+            // 3. Insert pengajuan rekening baru ke `public.courier_bank_accounts`
+            val insertPayload = JSONObject().apply {
+                put("courier_id", currentCourierProfileId)
+                put("bank_name", cleanBank)
+                put("account_number", cleanNumber)
+                put("account_holder", cleanHolder)
+                if (!uploadedPassbookUrl.isNullOrBlank()) {
+                    put("passbook_photo_url", uploadedPassbookUrl)
+                }
+                put("is_primary", true)
+                put("verification_status", "pending")
+            }.toString()
+
+            val req = Request.Builder()
+                .url("$SUPABASE_URL/rest/v1/courier_bank_accounts")
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=representation")
+                .post(insertPayload.toRequestBody(jsonMediaType))
+                .build()
+
+            okHttpClient.newCall(req).execute().use { res ->
+                val body = res.body?.string().orEmpty().trim()
+                if (!res.isSuccessful) {
+                    return@withContext Result.failure(
+                        IllegalStateException("Gagal menyimpan rekening ke database (${res.code}): $body")
+                    )
+                }
+
+                // Segarkan daftar rekening di state lokal & UI Profile/Wallet
+                fetchAndSyncBankAccounts(currentCourierProfileId)
+
+                val created = _bankAccounts.value.firstOrNull { it.accountNumber == cleanNumber }
+                    ?: CourierBankAccountRecord(
+                        id = 0,
+                        courierId = currentCourierProfileId,
+                        bankName = cleanBank,
+                        accountNumber = cleanNumber,
+                        accountHolder = cleanHolder,
+                        isPrimary = true,
+                        verificationStatus = "pending"
+                    )
+                Result.success(created)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "submitBankAccountRequest error", e)
+            Result.failure(e)
+        }
+    }
+
     private fun fetchAndSyncWalletAndTransactions(courierProfileId: Int) {
         val txArr = executeGetJsonArray(
             "$SUPABASE_URL/rest/v1/wallet_transactions?select=*&courier_id=eq.$courierProfileId&order=created_at.desc"
@@ -1088,7 +1384,9 @@ class CourierSupabaseService private constructor(
 
     private fun fetchAndSyncWithdrawals(courierProfileId: Int) {
         val wdArr = executeGetJsonArray(
-            "$SUPABASE_URL/rest/v1/withdrawals?select=*,courier_bank_accounts(bank_name,account_number,account_holder)&courier_id=eq.$courierProfileId&order=created_at.desc"
+            "$SUPABASE_URL/rest/v1/withdrawals" +
+                "?select=*,courier_bank_accounts(bank_name,account_number,account_holder),users(name)" +
+                "&courier_id=eq.$courierProfileId&order=created_at.desc"
         ) ?: return
 
         var totalWithdrawnSuccess = 0L
@@ -1099,9 +1397,11 @@ class CourierSupabaseService private constructor(
             val code = row.optString("withdrawal_code", "WD-${row.optInt("id")}")
             val amount = row.optDouble("amount", 0.0).toLong()
             val statusRaw = row.optString("status", "pending").lowercase()
+            val proofUrl = row.optString("transfer_proof_url")
+                .takeIf { it.isNotBlank() && it != "null" }
 
             val mappedStatus = when (statusRaw) {
-                "processing" -> WithdrawalStatus.PROCESSING
+                "processing", "transferred", "sent", "waiting_confirmation" -> WithdrawalStatus.PROCESSING
                 "success", "approved", "completed", "paid" -> {
                     totalWithdrawnSuccess += amount
                     WithdrawalStatus.SUCCESS
@@ -1114,6 +1414,15 @@ class CourierSupabaseService private constructor(
             val bankName = bankObj?.optString("bank_name").orEmpty().ifBlank { repository.courier.value.bankName }
             val accNum = bankObj?.optString("account_number").orEmpty().ifBlank { repository.courier.value.bankAccountNumber }
             val accHolder = bankObj?.optString("account_holder").orEmpty().ifBlank { repository.courier.value.bankAccountHolder }
+            val adminName = row.optJSONObject("users")?.optString("name")
+                ?.takeIf { it.isNotBlank() && it != "null" }
+
+            val processedAtFormatted = row.optString("processed_at")
+                .takeIf { it.isNotBlank() && it != "null" }
+                ?.let { formatTimestampShort(it) }
+
+            val rejectionReason = row.optString("rejection_reason")
+                .takeIf { it.isNotBlank() && it != "null" }
 
             list.add(
                 WithdrawalHistoryItem(
@@ -1124,7 +1433,10 @@ class CourierSupabaseService private constructor(
                     amount = amount,
                     date = formatTimestampShort(row.optString("created_at")),
                     status = mappedStatus,
-                    rejectionReason = null
+                    rejectionReason = rejectionReason,
+                    transferProofUrl = proofUrl,
+                    processedAt = processedAtFormatted,
+                    processedByName = adminName
                 )
             )
         }
@@ -1133,6 +1445,41 @@ class CourierSupabaseService private constructor(
         val curWallet = repository.walletBalance.value
         repository.syncWalletBalanceFromStream(curWallet.copy(withdrawnBalance = totalWithdrawnSuccess))
     }
+
+    /**
+     * Dipanggil saat kurir menekan tombol "Konfirmasi Uang Sudah Diterima"
+     * setelah memeriksa bukti transfer dari Admin.
+     */
+    suspend fun confirmWithdrawalReceived(withdrawalCode: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                if (withdrawalCode.isBlank()) {
+                    return@withContext Result.failure(
+                        IllegalArgumentException("Kode penarikan tidak valid.")
+                    )
+                }
+                val payload = JSONObject().apply {
+                    put("status", "completed")
+                }.toString()
+
+                val updated = executePatch(
+                    "$SUPABASE_URL/rest/v1/withdrawals?withdrawal_code=eq.$withdrawalCode",
+                    payload
+                )
+
+                if (!updated) {
+                    return@withContext Result.failure(
+                        IllegalStateException("Gagal memverifikasi pencairan dana ke database.")
+                    )
+                }
+
+                syncAllTablesOnce()
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Log.e(TAG, "confirmWithdrawalReceived error", e)
+                Result.failure(e)
+            }
+        }
 
     suspend fun getWalletSummary(
         courierId: String = repository.courier.value.id
@@ -1227,7 +1574,38 @@ class CourierSupabaseService private constructor(
                 )
             )
         }
+        applySyncedNotifications(list)
+    }
+
+    internal fun applySyncedNotifications(list: List<CourierNotificationRecord>) {
+        val ctx = appContext
+        list.forEach { item ->
+            if (item.isUnread && ctx != null && notifiedIds.add(item.id)) {
+                CourierNotificationHelper.showSystemNotification(
+                    context = ctx,
+                    notificationId = item.id.hashCode(),
+                    title = item.title,
+                    message = item.message
+                )
+            }
+        }
         _notifications.value = list
+    }
+
+    internal fun hasNotifiedForTest(notificationId: String): Boolean = notificationId in notifiedIds
+
+    suspend fun markNotificationAsRead(notificationId: String) = withContext(Dispatchers.IO) {
+        val idInt = notificationId.toIntOrNull() ?: return@withContext
+        val payload = JSONObject().apply { put("is_read", true) }.toString()
+        val ok = executePatch("$SUPABASE_URL/rest/v1/notifications?id=eq.$idInt", payload)
+        if (ok) {
+            _notifications.value = _notifications.value.map {
+                if (it.id == notificationId) it.copy(isUnread = false) else it
+            }
+        }
+        if (currentCourierProfileId > 0) {
+            fetchAndSyncNotifications(currentCourierProfileId)
+        }
     }
 
     private fun fetchAndSyncSupportContacts() {
@@ -1247,6 +1625,153 @@ class CourierSupabaseService private constructor(
             )
         }
         _supportContacts.value = list
+    }
+
+    // =========================================================================
+    // 6B. IN-APP REALTIME CHAT (chat_messages: courier_admin & order_chat)
+    // =========================================================================
+
+    /**
+     * Mengambil riwayat chat Kurir <-> Admin berdasarkan UUID kurir yang sedang login.
+     */
+    suspend fun fetchAdminChatMessages(): List<ChatMessageRecord> = withContext(Dispatchers.IO) {
+        if (currentUserUuid.isBlank()) return@withContext emptyList()
+        val url = "$SUPABASE_URL/rest/v1/chat_messages" +
+            "?select=*&room_type=eq.courier_admin&courier_user_id=eq.$currentUserUuid&order=created_at.asc"
+        val arr = executeGetJsonArray(url) ?: return@withContext _adminChatMessages.value
+        val parsed = parseChatMessagesJson(arr)
+        _adminChatMessages.value = parsed
+        parsed
+    }
+
+    /**
+     * Mengirim pesan baru dari Kurir ke Admin di dalam aplikasi.
+     */
+    suspend fun sendAdminChatMessage(
+        messageText: String,
+        context: Context? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val cleanText = messageText.trim()
+        if (cleanText.isEmpty() || currentUserUuid.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("Pesan tidak boleh kosong."))
+        }
+        val payload = JSONObject().apply {
+            put("room_type", "courier_admin")
+            put("courier_user_id", currentUserUuid)
+            put("sender_id", currentUserUuid)
+            put("sender_role", "courier")
+            put("sender_name", repository.courier.value.name)
+            put("message", cleanText)
+            put("is_read", false)
+        }.toString()
+
+        val postResult = executePostWithDetail(
+            url = "$SUPABASE_URL/rest/v1/chat_messages",
+            jsonPayload = payload,
+            context = context
+        )
+        if (postResult.isSuccess) {
+            fetchAdminChatMessages()
+            Result.success(Unit)
+        } else {
+            postResult
+        }
+    }
+
+    /**
+     * Mengambil riwayat chat Kurir <-> Konsumen untuk pesanan spesifik (berdasarkan orderCode atau orderDbId).
+     */
+    suspend fun fetchOrderChatMessages(orderCode: String): List<ChatMessageRecord> = withContext(Dispatchers.IO) {
+        val orderDbId = orderMetaByCode[orderCode]?.orderDbId ?: return@withContext emptyList()
+        val url = "$SUPABASE_URL/rest/v1/chat_messages" +
+            "?select=*&room_type=eq.order_chat&order_id=eq.$orderDbId&order=created_at.asc"
+        val arr = executeGetJsonArray(url) ?: return@withContext (_orderChatMessages.value[orderDbId] ?: emptyList())
+        val parsed = parseChatMessagesJson(arr)
+        _orderChatMessages.value = _orderChatMessages.value + (orderDbId to parsed)
+        parsed
+    }
+
+    /**
+     * Mengirim pesan baru dari Kurir ke Konsumen pada pesanan yang sedang dikirim.
+     */
+    suspend fun sendOrderChatMessage(
+        orderCode: String,
+        messageText: String,
+        context: Context? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val cleanText = messageText.trim()
+        val orderDbId = orderMetaByCode[orderCode]?.orderDbId ?: 0
+        if (cleanText.isEmpty() || currentUserUuid.isBlank() || orderDbId <= 0) {
+            return@withContext Result.failure(IllegalArgumentException("Data pesanan atau pesan tidak valid."))
+        }
+
+        val payload = JSONObject().apply {
+            put("room_type", "order_chat")
+            put("order_id", orderDbId)
+            put("courier_user_id", currentUserUuid)
+            put("sender_id", currentUserUuid)
+            put("sender_role", "courier")
+            put("sender_name", repository.courier.value.name)
+            put("message", cleanText)
+            put("is_read", false)
+        }.toString()
+
+        val postResult = executePostWithDetail(
+            url = "$SUPABASE_URL/rest/v1/chat_messages",
+            jsonPayload = payload,
+            context = context
+        )
+        if (postResult.isSuccess) {
+            fetchOrderChatMessages(orderCode)
+            Result.success(Unit)
+        } else {
+            postResult
+        }
+    }
+
+    /**
+     * Menandai pesan masuk dari Admin/Konsumen sudah dibaca saat ruang chat dibuka.
+     */
+    suspend fun markChatMessagesAsRead(roomType: String, orderCode: String? = null) = withContext(Dispatchers.IO) {
+        if (currentUserUuid.isBlank()) return@withContext
+        val filter = if (roomType == "order_chat" && orderCode != null) {
+            val orderDbId = orderMetaByCode[orderCode]?.orderDbId ?: return@withContext
+            "room_type=eq.order_chat&order_id=eq.$orderDbId&sender_id=neq.$currentUserUuid&is_read=eq.false"
+        } else {
+            "room_type=eq.courier_admin&courier_user_id=eq.$currentUserUuid&sender_id=neq.$currentUserUuid&is_read=eq.false"
+        }
+        val payload = JSONObject().apply { put("is_read", true) }.toString()
+        executePatch("$SUPABASE_URL/rest/v1/chat_messages?$filter", payload)
+    }
+
+    internal fun parseChatMessagesJson(arr: JSONArray): List<ChatMessageRecord> {
+        val list = mutableListOf<ChatMessageRecord>()
+        for (i in 0 until arr.length()) {
+            val row = arr.optJSONObject(i) ?: continue
+            val senderId = row.optString("sender_id")
+            val senderRole = row.optString("sender_role", "admin")
+            val defaultName = when (senderRole.lowercase()) {
+                "admin" -> "Admin Kube"
+                "consumer" -> "Pelanggan"
+                else -> "Kurir"
+            }
+            list.add(
+                ChatMessageRecord(
+                    id = row.optInt("id", 0),
+                    roomType = row.optString("room_type", "courier_admin"),
+                    orderId = if (row.isNull("order_id")) null else row.optInt("order_id"),
+                    courierUserId = row.optString("courier_user_id"),
+                    senderId = senderId,
+                    senderRole = senderRole,
+                    senderName = row.optString("sender_name").takeIf { it.isNotBlank() && it != "null" } ?: defaultName,
+                    message = row.optString("message"),
+                    isRead = row.optBoolean("is_read", false),
+                    timeLabel = formatTimestampShort(row.optString("created_at")),
+                    isFromMe = senderId == currentUserUuid
+                )
+            )
+        }
+        return list
     }
 
     // =========================================================================
@@ -1315,6 +1840,48 @@ class CourierSupabaseService private constructor(
                 .build()
             okHttpClient.newCall(request).execute().use { it.isSuccessful }
         }.getOrDefault(false)
+    }
+
+    suspend fun executePostWithDetail(
+        url: String,
+        jsonPayload: String,
+        context: Context? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        fun performPost(): Pair<Int, String> {
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("apikey", SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer ${currentAccessToken ?: SUPABASE_ANON_KEY}")
+                .addHeader("Content-Type", "application/json")
+                .post(jsonPayload.toRequestBody(jsonMediaType))
+                .build()
+            return okHttpClient.newCall(request).execute().use { res ->
+                res.code to res.body?.string().orEmpty().trim()
+            }
+        }
+
+        try {
+            var (code, errorBody) = performPost()
+            if (code == 401 && context != null) {
+                val refreshed = restoreSessionIfRemembered(context)
+                if (refreshed.isSuccess) {
+                    val retry = performPost()
+                    code = retry.first
+                    errorBody = retry.second
+                }
+            }
+            if (code in 200..299) {
+                Result.success(Unit)
+            } else {
+                val detail = errorBody.ifBlank { "Tidak ada detail error dari server" }
+                Result.failure(IllegalStateException("Gagal ($code): $detail"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "executePostWithDetail network exception", e)
+            Result.failure(
+                IllegalStateException("Gagal (network): ${e.message ?: "Kendala koneksi jaringan"}", e)
+            )
+        }
     }
 
     private fun executePatch(url: String, jsonPayload: String): Boolean {

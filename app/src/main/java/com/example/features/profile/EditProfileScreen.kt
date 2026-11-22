@@ -32,16 +32,12 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -58,13 +54,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.core.components.LiquidGlassBackground
-import com.example.core.components.LiquidGlassCard
+import com.example.core.components.KubeFeedbackManager
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassPill
+import com.example.core.components.kubeLightTextFieldColors
 import com.example.core.network.CourierSupabaseService
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
@@ -92,16 +91,14 @@ fun EditProfileScreen(
     val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
 
     var phoneInput by remember(courier.phone) { mutableStateOf(courier.phone) }
     var addressInput by remember(courier.address) { mutableStateOf(courier.address) }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color.Transparent
     ) { paddingValues ->
-        LiquidGlassBackground(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -123,23 +120,20 @@ fun EditProfileScreen(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
+                    KubeGlassCard(
                         modifier = Modifier
                             .size(44.dp)
-                            .shadow(3.dp, CircleShape, ambientColor = Color(0x1A0083B0))
-                            .clip(CircleShape)
-                            .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)), CircleShape),
+                            .testTag("btn_back_edit_profile"),
                         shape = CircleShape,
-                        color = Color.White.copy(alpha = 0.50f)
+                        contentPadding = PaddingValues(0.dp),
+                        onClick = onBack
                     ) {
-                        IconButton(
-                            onClick = onBack,
-                            modifier = Modifier.testTag("btn_back_edit_profile")
-                        ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Kembali",
-                                tint = KubeTextDark
+                                tint = KubeTextDark,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -192,21 +186,15 @@ fun EditProfileScreen(
                 }
 
                 // Form Container
-                LiquidGlassCard(
+                KubeGlassCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 20.dp),
                     shape = RoundedCornerShape(24.dp),
-                    elevation = 4.dp,
-                    fillAlphaTop = 0.60f,
-                    fillAlphaBottom = 0.35f,
-                    borderAlphaTop = 0.95f,
-                    borderAlphaBottom = 0.40f
+                    contentPadding = PaddingValues(20.dp)
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(6.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         // 1. Kolom Nama Lengkap (READ-ONLY)
@@ -221,18 +209,10 @@ fun EditProfileScreen(
                                     fontWeight = FontWeight.SemiBold,
                                     color = KubeTextDark
                                 )
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Color(0xFFF1F5F9)
-                                ) {
-                                    Text(
-                                        text = "Read-Only",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF64748B),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
+                                KubeGlassPill(
+                                    text = "Read-Only",
+                                    textColor = Color(0xFF64748B)
+                                )
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             OutlinedTextField(
@@ -255,12 +235,9 @@ fun EditProfileScreen(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
+                                textStyle = TextStyle(color = Color(0xFF0F172A), fontSize = 14.sp),
                                 shape = RoundedCornerShape(14.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    disabledTextColor = KubeTextDark.copy(alpha = 0.85f),
-                                    disabledBorderColor = Color(0xFFCBD5E1),
-                                    disabledContainerColor = Color(0xFFF8FAFC)
-                                ),
+                                colors = kubeLightTextFieldColors(),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("field_nama_readonly")
@@ -279,18 +256,10 @@ fun EditProfileScreen(
                                     fontWeight = FontWeight.SemiBold,
                                     color = KubeTextDark
                                 )
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = Color(0xFFF1F5F9)
-                                ) {
-                                    Text(
-                                        text = "Read-Only",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF64748B),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
+                                KubeGlassPill(
+                                    text = "Read-Only",
+                                    textColor = Color(0xFF64748B)
+                                )
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             OutlinedTextField(
@@ -313,12 +282,9 @@ fun EditProfileScreen(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
+                                textStyle = TextStyle(color = Color(0xFF0F172A), fontSize = 14.sp),
                                 shape = RoundedCornerShape(14.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    disabledTextColor = KubeTextDark.copy(alpha = 0.85f),
-                                    disabledBorderColor = Color(0xFFCBD5E1),
-                                    disabledContainerColor = Color(0xFFF8FAFC)
-                                ),
+                                colors = kubeLightTextFieldColors(),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("field_email_readonly")
@@ -345,13 +311,9 @@ fun EditProfileScreen(
                                     )
                                 },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                textStyle = TextStyle(color = Color(0xFF0F172A), fontSize = 14.sp),
                                 shape = RoundedCornerShape(14.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = KubeBlueBright,
-                                    unfocusedBorderColor = Color(0xFFCBD5E1),
-                                    focusedContainerColor = Color.White,
-                                    unfocusedContainerColor = Color.White.copy(alpha = 0.85f)
-                                ),
+                                colors = kubeLightTextFieldColors(),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("field_nomor_hp")
@@ -379,13 +341,9 @@ fun EditProfileScreen(
                                 },
                                 minLines = 2,
                                 maxLines = 3,
+                                textStyle = TextStyle(color = Color(0xFF0F172A), fontSize = 14.sp),
                                 shape = RoundedCornerShape(14.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = KubeBlueBright,
-                                    unfocusedBorderColor = Color(0xFFCBD5E1),
-                                    focusedContainerColor = Color.White,
-                                    unfocusedContainerColor = Color.White.copy(alpha = 0.85f)
-                                ),
+                                colors = kubeLightTextFieldColors(),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("field_alamat_domisili")
@@ -398,12 +356,25 @@ fun EditProfileScreen(
                         Button(
                             onClick = {
                                 coroutineScope.launch {
-                                    supabaseService.updateCourierProfile(
+                                    val res = supabaseService.updateCourierProfile(
                                         courierId = courier.id,
                                         phone = phoneInput,
                                         address = addressInput
                                     )
-                                    snackbarHostState.showSnackbar("Profil berhasil diperbarui & disinkronkan!")
+                                    res.fold(
+                                        onSuccess = {
+                                            KubeFeedbackManager.showSuccess(
+                                                "Profil Diperbarui",
+                                                "Nomor WhatsApp dan alamat domisili kurir berhasil disimpan."
+                                            )
+                                        },
+                                        onFailure = { err ->
+                                            KubeFeedbackManager.showError(
+                                                "Gagal Memperbarui Profil",
+                                                err.message ?: "Terjadi kendala saat menyimpan perubahan profil."
+                                            )
+                                        }
+                                    )
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = KubeBlueBright),

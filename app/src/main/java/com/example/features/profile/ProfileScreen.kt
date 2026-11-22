@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
@@ -40,15 +42,12 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.ToggleOn
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -69,19 +68,26 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.core.components.LiquidGlassBackground
-import com.example.core.components.LiquidGlassCard
+import com.example.core.components.DbBodyText
+import com.example.core.components.DbTitleText
+import com.example.core.components.InAppChatBottomSheet
+import com.example.core.components.KubeGlassCard
+import com.example.core.components.KubeGlassDialog
+import com.example.core.components.KubeGlassIconBox
+import com.example.core.components.KubeGlassPill
+import com.example.core.components.KubeMutedText
+import com.example.core.components.KubePrimaryText
 import com.example.core.model.Courier
 import com.example.core.model.maskAccountNumber
 import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
-import com.example.ui.theme.KubeGreen
 import com.example.ui.theme.KubeTextDark
 import com.example.ui.theme.KubeTextMuted
 
@@ -152,6 +158,8 @@ private fun ProfileMainContent(
     val courierProfileId = activeCourierProfileId.orEmpty().ifBlank { initialCourier.id }
     val courier by supabaseService.streamCourierProfile(courierProfileId).collectAsState(initial = initialCourier)
     val warehouse by supabaseService.streamWarehouseInfo().collectAsState(initial = com.example.core.network.WarehouseInfo())
+    val bankAccounts by supabaseService.bankAccounts.collectAsState()
+    val context = LocalContext.current
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -159,12 +167,26 @@ private fun ProfileMainContent(
     var showCredentialsSheet by remember { mutableStateOf(false) }
     var showWarehouseSheet by remember { mutableStateOf(false) }
     var showSupportDialog by remember { mutableStateOf(false) }
+    var showAdminChatSheet by remember { mutableStateOf(false) }
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
 
     // 1. Support & Dispatcher Liquid Glass Dialog (Perbaikan Bantuan)
     if (showSupportDialog) {
         SupportGlassDialog(
+            onOpenAdminLiveChat = {
+                showSupportDialog = false
+                showAdminChatSheet = true
+            },
             onDismiss = { showSupportDialog = false }
+        )
+    }
+
+    if (showAdminChatSheet) {
+        InAppChatBottomSheet(
+            title = "Admin Operasional Kube",
+            subtitle = "Live Chat Operasional & Dispatcher",
+            roomType = "courier_admin",
+            onDismiss = { showAdminChatSheet = false }
         )
     }
 
@@ -192,52 +214,26 @@ private fun ProfileMainContent(
         )
     }
 
-    // 10. Logout Confirmation Dialog
+    // 10. Logout Confirmation Liquid Glass Dialog
     if (showLogoutConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showLogoutConfirmDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ExitToApp,
-                    contentDescription = null,
-                    tint = Color(0xFFDC2626),
-                    modifier = Modifier.size(28.dp)
-                )
+        KubeGlassDialog(
+            onDismiss = { showLogoutConfirmDialog = false },
+            icon = Icons.AutoMirrored.Rounded.Logout,
+            iconTint = Color(0xFFDC2626),
+            title = "Konfirmasi Keluar",
+            message = "Apakah Anda yakin ingin keluar dari akun kurir? Pastikan seluruh pesanan aktif telah diperbarui.",
+            confirmText = "Ya, Keluar",
+            confirmButtonColor = Color(0xFFDC2626),
+            onConfirm = {
+                showLogoutConfirmDialog = false
+                CourierSupabaseService.instance.logoutCourier(context)
+                onSignOut()
             },
-            title = {
-                Text(
-                    text = "Konfirmasi Keluar",
-                    fontWeight = FontWeight.Bold,
-                    color = KubeTextDark
-                )
-            },
-            text = {
-                Text(
-                    text = "Apakah Anda yakin ingin keluar dari akun kurir? Pastikan seluruh pesanan aktif telah diperbarui.",
-                    color = KubeTextMuted,
-                    fontSize = 14.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showLogoutConfirmDialog = false
-                        onSignOut()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626))
-                ) {
-                    Text("Ya, Keluar", fontWeight = FontWeight.Bold, color = Color.White)
-                }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { showLogoutConfirmDialog = false }) {
-                    Text("Batal")
-                }
-            }
+            dismissText = "Batal"
         )
     }
 
-    LiquidGlassBackground(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
@@ -257,22 +253,18 @@ private fun ProfileMainContent(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .shadow(3.dp, CircleShape, ambientColor = Color(0x1A0083B0))
-                        .clip(CircleShape)
-                        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)), CircleShape),
+                KubeGlassCard(
+                    modifier = Modifier.size(44.dp),
                     shape = CircleShape,
-                    color = Color.White.copy(alpha = 0.45f)
+                    contentPadding = PaddingValues(0.dp),
+                    onClick = { showSupportDialog = true }
                 ) {
-                    IconButton(
-                        onClick = { showSupportDialog = true }
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Filled.HeadsetMic,
                             contentDescription = "Bantuan Dispatcher",
-                            tint = Color(0xFF0F3657)
+                            tint = Color(0xFF0F3657),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -296,22 +288,18 @@ private fun ProfileMainContent(
                     )
                 }
 
-                Surface(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .shadow(3.dp, CircleShape, ambientColor = Color(0x1A0083B0))
-                        .clip(CircleShape)
-                        .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)), CircleShape),
+                KubeGlassCard(
+                    modifier = Modifier.size(44.dp),
                     shape = CircleShape,
-                    color = Color.White.copy(alpha = 0.45f)
+                    contentPadding = PaddingValues(0.dp),
+                    onClick = { onNavigateToSubScreen(ProfileSubScreen.EDIT_PROFILE) }
                 ) {
-                    IconButton(
-                        onClick = { onNavigateToSubScreen(ProfileSubScreen.EDIT_PROFILE) }
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Filled.Edit,
                             contentDescription = "Edit Profil",
-                            tint = Color(0xFF0F3657)
+                            tint = Color(0xFF0F3657),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -345,44 +333,24 @@ private fun ProfileMainContent(
                     text = courier.name,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
-                    color = KubeTextDark
+                    color = KubePrimaryText
                 )
 
                 Spacer(modifier = Modifier.height(2.dp))
 
-                Text(
+                DbBodyText(
                     text = "${courier.email} • ID: ${courier.id}",
-                    fontSize = 13.sp,
-                    color = KubeTextMuted
+                    maxLines = 1,
+                    color = Color(0xFF1E3A4C)
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Duty Status Pill
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = Color.White.copy(alpha = 0.50f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.85f))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(if (courier.isActiveDuty) Color(0xFF00C853) else Color(0xFFB0BEC5))
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (courier.isActiveDuty) "Status: Aktif Bertugas" else "Status: Sedang Istirahat",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF0F3657)
-                        )
-                    }
-                }
+                KubeGlassPill(
+                    text = if (courier.isActiveDuty) "Status: Aktif Bertugas" else "Status: Sedang Istirahat (Off-Duty)",
+                    textColor = if (courier.isActiveDuty) Color(0xFF0F3657) else Color(0xFF92400E)
+                )
             }
 
             Spacer(modifier = Modifier.height(26.dp))
@@ -461,13 +429,22 @@ private fun ProfileMainContent(
                     onClick = { showWarehouseSheet = true }
                 )
 
-                // 7. Rekening Bank -> BankAccountScreen (Masking BCA)
+                // 7. Rekening Bank -> BankAccountScreen (Masking + Status Verifikasi Live)
+                val primaryBankAccount = bankAccounts.firstOrNull { it.isPrimary } ?: bankAccounts.firstOrNull()
+                val bankDisplayLabel = (primaryBankAccount?.bankName ?: courier.bankName).ifBlank { "Bank" }
+                val accountNumDisplay = primaryBankAccount?.accountNumber ?: courier.bankAccountNumber
+                val accountHolderDisplay = (primaryBankAccount?.accountHolder ?: courier.bankAccountHolder).ifBlank { courier.name.ifBlank { "-" } }
+                val bankStatusBadge = when (primaryBankAccount?.verificationStatus?.trim()?.lowercase()) {
+                    "verified", "approved" -> "Terverifikasi"
+                    "rejected" -> "Ditolak"
+                    else -> "Menunggu Verifikasi Admin"
+                }
                 ProfileMenuGlassItem(
                     icon = Icons.Filled.AccountBalance,
                     label = "Rekening Bank",
-                    subtitle = "BCA • ${maskAccountNumber(courier.bankAccountNumber)} (a.n. ${courier.bankAccountHolder})",
+                    subtitle = "$bankDisplayLabel • ${maskAccountNumber(accountNumDisplay)} (a.n. $accountHolderDisplay)",
                     tag = "profile_item_rekening_bank",
-                    badgeText = "Terverifikasi",
+                    badgeText = bankStatusBadge,
                     onClick = { onNavigateToSubScreen(ProfileSubScreen.BANK_ACCOUNT) }
                 )
 
@@ -519,23 +496,17 @@ private fun ProfileDutyToggleItem(
     onToggle: (Boolean) -> Unit,
     tag: String
 ) {
-    LiquidGlassCard(
+    KubeGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(tag),
         shape = RoundedCornerShape(22.dp),
-        elevation = 4.dp,
-        fillAlphaTop = 0.58f,
-        fillAlphaBottom = 0.30f,
-        borderAlphaTop = 0.95f,
-        borderAlphaBottom = 0.38f,
-        borderWidth = 1.2.dp,
+        isHighlighted = isActiveDuty,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
         onClick = { onToggle(!isActiveDuty) }
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -543,46 +514,29 @@ private fun ProfileDutyToggleItem(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isActiveDuty) Color(0xFFE8F5E9) else Color(0xFFECEFF1)
-                        )
-                        .border(
-                            1.dp,
-                            if (isActiveDuty) Color(0xFFC8E6C9) else Color(0xFFCFD8DC),
-                            CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isActiveDuty) Icons.Filled.CheckCircle else Icons.Filled.ToggleOn,
-                        contentDescription = "Status Bertugas",
-                        tint = if (isActiveDuty) Color(0xFF2E7D32) else Color(0xFF78909C),
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+                KubeGlassIconBox(
+                    icon = if (isActiveDuty) Icons.Filled.CheckCircle else Icons.Filled.ToggleOn,
+                    contentDescription = "Status Bertugas",
+                    tint = if (isActiveDuty) Color(0xFF2E7D32) else Color(0xFF78909C),
+                    isHighlighted = isActiveDuty,
+                    boxSize = 42.dp,
+                    iconSize = 22.dp
+                )
 
                 Spacer(modifier = Modifier.width(14.dp))
 
-                Column {
-                    Text(
-                        text = "Status Bertugas",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = KubeTextDark
-                    )
+                Column(modifier = Modifier.weight(1f)) {
+                    DbTitleText(text = "Status Bertugas")
                     Spacer(modifier = Modifier.height(2.dp))
-                    Text(
+                    DbBodyText(
                         text = if (isActiveDuty) "Aktif Bertugas (Menerima Order Es)" else "Sedang Istirahat (Off-Duty)",
-                        fontSize = 12.sp,
-                        color = if (isActiveDuty) Color(0xFF2E7D32) else KubeTextMuted,
-                        fontWeight = if (isActiveDuty) FontWeight.SemiBold else FontWeight.Normal
+                        maxLines = 1,
+                        color = if (isActiveDuty) Color(0xFF2E7D32) else Color(0xFF1E3A4C)
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.width(12.dp))
 
             Switch(
                 checked = isActiveDuty,
@@ -689,14 +643,13 @@ private fun VehicleInfoBottomSheet(
                 extraInfo = "Servis Terakhir: 15 Okt 2026 • Mesin & Kompresor Prima"
             )
 
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = Color(0xFFEFF6FF),
-                border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(14.dp),
+                isHighlighted = true,
+                contentPadding = PaddingValues(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
@@ -740,39 +693,33 @@ private fun VehicleDetailCard(
     extraInfo: String,
     isHighlight: Boolean = false
 ) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color.White,
-        border = BorderStroke(1.dp, if (isHighlight) KubeBlueBright.copy(alpha = 0.5f) else Color(0xFFE2E8F0)),
+    KubeGlassCard(
+        shape = RoundedCornerShape(18.dp),
+        isHighlighted = isHighlight,
+        contentPadding = PaddingValues(14.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(if (isHighlight) Color(0xFFE0F2FE) else Color(0xFFF1F5F9)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = if (isHighlight) KubeBlueBright else Color(0xFF475569),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            KubeGlassIconBox(
+                icon = icon,
+                contentDescription = null,
+                tint = if (isHighlight) KubeBlueBright else Color(0xFF475569),
+                isHighlighted = isHighlight,
+                boxSize = 40.dp,
+                iconSize = 20.dp
+            )
 
             Spacer(modifier = Modifier.width(14.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = label, fontSize = 11.sp, color = KubeTextMuted)
+                Text(text = label, fontSize = 11.sp, color = Color(0xFF1E3A4C))
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(text = value, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = KubeTextDark)
+                DbTitleText(text = value)
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(text = extraInfo, fontSize = 11.sp, color = Color(0xFF64748B))
+                DbBodyText(text = extraInfo, maxLines = 2, color = Color(0xFF1E3A4C))
             }
         }
     }
@@ -840,144 +787,100 @@ private fun CredentialsBiometricsBottomSheet(
 
             Spacer(modifier = Modifier.height(2.dp))
 
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFF1F5F9)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Badge,
-                            contentDescription = null,
-                            tint = Color(0xFF475569),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.Badge,
+                        contentDescription = null,
+                        tint = Color(0xFF475569),
+                        boxSize = 38.dp,
+                        iconSize = 18.dp
+                    )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("ID Kurir", fontSize = 11.sp, color = KubeTextMuted)
+                        Text("ID Kurir", fontSize = 11.sp, color = Color(0xFF1E3A4C))
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = courier.id,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = KubeTextDark
-                        )
+                        DbTitleText(text = courier.id)
                     }
-                    Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF1F5F9)) {
-                        Text(
-                            text = "Read-Only",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF64748B),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    KubeGlassPill(
+                        text = "Read-Only",
+                        textColor = Color(0xFF1E3A4C)
+                    )
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFF1F5F9)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Person,
-                            contentDescription = null,
-                            tint = Color(0xFF475569),
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.Person,
+                        contentDescription = null,
+                        tint = Color(0xFF475569),
+                        boxSize = 38.dp,
+                        iconSize = 18.dp
+                    )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Email Terdaftar", fontSize = 11.sp, color = KubeTextMuted)
+                        Text("Email Terdaftar", fontSize = 11.sp, color = Color(0xFF1E3A4C))
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = courier.email,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = KubeTextDark
-                        )
+                        DbTitleText(text = courier.email)
                     }
-                    Surface(shape = RoundedCornerShape(8.dp), color = Color(0xFFF1F5F9)) {
-                        Text(
-                            text = "Read-Only",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF64748B),
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    KubeGlassPill(
+                        text = "Read-Only",
+                        textColor = Color(0xFF1E3A4C)
+                    )
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = Color.White,
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(18.dp),
+                contentPadding = PaddingValues(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFFEDE9FE)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Fingerprint,
-                                contentDescription = null,
-                                tint = Color(0xFF7C3AED),
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
+                        KubeGlassIconBox(
+                            icon = Icons.Filled.Fingerprint,
+                            contentDescription = null,
+                            tint = Color(0xFF7C3AED),
+                            boxSize = 40.dp,
+                            iconSize = 22.dp
+                        )
                         Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
+                        Column(modifier = Modifier.weight(1f)) {
+                            DbTitleText(
                                 text = "Aktifkan Login Sidik Jari / Face ID",
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = KubeTextDark
+                                maxLines = 2
                             )
                             Spacer(modifier = Modifier.height(2.dp))
-                            Text(
+                            DbBodyText(
                                 text = "Masuk instan menggunakan biometrik perangkat",
-                                fontSize = 11.sp,
-                                color = KubeTextMuted
+                                maxLines = 2,
+                                color = Color(0xFF1E3A4C)
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(12.dp))
 
                     Switch(
                         checked = courier.isBiometricEnabled,
@@ -991,32 +894,23 @@ private fun CredentialsBiometricsBottomSheet(
                 }
             }
 
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color(0xFFFFFBEB),
-                border = BorderStroke(1.dp, Color(0xFFFDE68A)),
+            KubeGlassCard(
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(14.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("notice_password_managed_by_system")
             ) {
                 Row(
-                    modifier = Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFFEF3C7)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Lock,
-                            contentDescription = "Terkunci",
-                            tint = Color(0xFFD97706),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    KubeGlassIconBox(
+                        icon = Icons.Filled.Lock,
+                        contentDescription = "Terkunci",
+                        tint = Color(0xFFD97706),
+                        boxSize = 38.dp,
+                        iconSize = 20.dp
+                    )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
@@ -1055,7 +949,7 @@ private fun CredentialsBiometricsBottomSheet(
 }
 
 /**
- * Standardized profile menu item with liquid glass styling, optional badge, subtitle, and tag.
+ * Standardized profile menu item with KubeGlassCard, KubeGlassIconBox, and KubeGlassPill.
  */
 @Composable
 private fun ProfileMenuGlassItem(
@@ -1068,23 +962,16 @@ private fun ProfileMenuGlassItem(
     textColor: Color = KubeTextDark,
     onClick: () -> Unit
 ) {
-    LiquidGlassCard(
+    KubeGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag(tag),
         shape = RoundedCornerShape(22.dp),
-        elevation = 3.dp,
-        fillAlphaTop = 0.55f,
-        fillAlphaBottom = 0.28f,
-        borderAlphaTop = 0.92f,
-        borderAlphaBottom = 0.35f,
-        borderWidth = 1.2.dp,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
         onClick = onClick
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -1092,60 +979,44 @@ private fun ProfileMenuGlassItem(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.85f))
-                        .border(1.dp, Color.White, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = label,
-                        tint = iconTint,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                KubeGlassIconBox(
+                    icon = icon,
+                    contentDescription = label,
+                    tint = iconTint,
+                    boxSize = 42.dp,
+                    iconSize = 20.dp
+                )
 
                 Spacer(modifier = Modifier.width(14.dp))
 
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
+                        DbTitleText(
                             text = label,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = textColor
+                            color = textColor,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         if (badgeText != null) {
                             Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = KubeGreen.copy(alpha = 0.15f),
-                                border = BorderStroke(1.dp, KubeGreen.copy(alpha = 0.35f))
-                            ) {
-                                Text(
-                                    text = badgeText,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF2E7D32),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
+                            KubeGlassPill(
+                                text = badgeText,
+                                textColor = Color(0xFF2E7D32)
+                            )
                         }
                     }
 
                     if (subtitle != null) {
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text(
+                        DbBodyText(
                             text = subtitle,
-                            fontSize = 11.sp,
-                            color = KubeTextMuted
+                            maxLines = 2,
+                            color = Color(0xFF1E3A4C)
                         )
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.width(12.dp))
 
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,

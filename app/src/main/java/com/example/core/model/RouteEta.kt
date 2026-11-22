@@ -15,30 +15,25 @@ enum class TrafficLevel(val displayName: String, val colorHex: Long) {
 }
 
 data class RouteEta(
-    val durationMinutes: Int,
-    val durationSeconds: Int = 0,
-    val distanceKm: Double,
+    val durationMinutes: Int = 15,
+    val durationSeconds: Int = 900,
+    val distanceKm: Double = 0.0,
     val trafficCondition: String = "Lalu Lintas Lancar",
     val trafficLevel: TrafficLevel = TrafficLevel.SMOOTH,
     val trafficColorHex: Long = 0xFF00C853,
     val formattedEta: String = "$durationMinutes menit lagi",
-    val nextInstruction: String = "200m belok kanan ke Jl. Melati",
+    val nextInstruction: String = "Ikuti rute menuju lokasi pelanggan",
     val courierSpeedKmh: Int = 28,
     val originLat: Double = -7.4285,
     val originLng: Double = 109.2215,
     val currentLat: Double = -7.4243,
     val currentLng: Double = 109.2302,
-    val destLat: Double = -7.4190,
-    val destLng: Double = 109.2410,
-    val destinationName: String = "Toko Es Segar",
-    val destinationAddress: String = "Jl. Melati No. 12, Purwokerto",
-    val progressFraction: Float = 0.45f,
-    val steps: List<RouteStep> = listOf(
-        RouteStep("Mulai dari Hub Kube Pabrik Es", 500, 60, "depart"),
-        RouteStep("Belok kanan ke Jl. Jend. Soedirman", 1200, 240, "turn-right"),
-        RouteStep("200m belok kanan ke Jl. Melati", 400, 90, "turn-right"),
-        RouteStep("Tiba di Toko Es Segar di sebelah kiri", 200, 50, "arrive")
-    ),
+    val destLat: Double? = null,
+    val destLng: Double? = null,
+    val destinationName: String = "Lokasi Pelanggan",
+    val destinationAddress: String = "Menunggu tujuan pengiriman",
+    val progressFraction: Float = 0.35f,
+    val steps: List<RouteStep> = emptyList(),
     val isRealTimeLive: Boolean = true,
-    val lastUpdatedText: String = "Baru saja diperbarui"
+    val lastUpdatedText: String = "Estimasi Rute Aktif"
 )

@@ -43,9 +43,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +58,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -73,7 +71,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.core.components.KubeFeedbackManager
+import com.example.core.components.kubeLightTextFieldColors
 import com.example.core.network.CourierSupabaseService
+import com.example.core.repository.OrderRepository
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeBlueDark
 import com.example.ui.theme.KubeSkyGradient
@@ -98,50 +99,72 @@ fun AuthScreen(
     var isLoading by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
     val density = LocalDensity.current
     val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
 
     val handleAuthSubmit: () -> Unit = {
         if (!isLoading) {
             coroutineScope.launch {
                 try {
                     if (isSignUp && password != confirmPassword) {
-                        snackbarHostState.showSnackbar("Konfirmasi kata sandi tidak cocok.")
+                        KubeFeedbackManager.showWarning(
+                            "Kata Sandi Tidak Cocok",
+                            "Konfirmasi kata sandi tidak cocok. Periksa kembali isian Anda."
+                        )
                         return@launch
                     }
                     if (isSignUp && !agreeToTerms) {
-                        snackbarHostState.showSnackbar("Harap setujui Syarat & Ketentuan terlebih dahulu.")
+                        KubeFeedbackManager.showWarning(
+                            "Persetujuan Diperlukan",
+                            "Harap setujui Syarat & Ketentuan terlebih dahulu."
+                        )
                         return@launch
                     }
+                    KubeFeedbackManager.dismiss()
                     isLoading = true
                     val result = CourierSupabaseService.instance.loginCourier(
                         email = email,
-                        password = password
+                        password = password,
+                        rememberMe = rememberMe,
+                        context = context
                     )
                     result.fold(
-                        onSuccess = {
+                        onSuccess = { session ->
                             CourierSupabaseService.instance.syncAllTablesOnce()
+                            val courierName = OrderRepository.instance.courier.value.name
+                                .ifBlank { session.email.substringBefore("@").ifBlank { "Kurir Kube" } }
+                            KubeFeedbackManager.showSuccess(
+                                "Login Berhasil",
+                                "Selamat bertugas kembali, $courierName!"
+                            )
                             isLoading = false
                             onAuthSuccess()
                         },
                         onFailure = { error ->
                             isLoading = false
-                            snackbarHostState.showSnackbar(
-                                error.message ?: "Gagal masuk ke akun kurir. Periksa kredensial Anda."
-                            )
+                            if (KubeFeedbackManager.currentEvent.value == null) {
+                                val msg = error.message ?: "Gagal masuk ke akun kurir. Periksa kredensial Anda."
+                                val title = when {
+                                    msg.contains("role_id", ignoreCase = true) ||
+                                        msg.contains("bukan kurir", ignoreCase = true) -> "Akses Akun Ditolak"
+                                    msg.contains("dinonaktifkan", ignoreCase = true) -> "Akun Dinonaktifkan"
+                                    else -> "Login Gagal"
+                                }
+                                KubeFeedbackManager.showError(title, msg)
+                            }
                         }
                     )
                 } catch (e: Exception) {
                     isLoading = false
-                    snackbarHostState.showSnackbar("Terjadi kendala saat autentikasi: ${e.message ?: "Coba lagi."}")
+                    KubeFeedbackManager.showError(
+                        "Kendala Autentikasi",
+                        "Terjadi kendala saat autentikasi: ${e.message ?: "Coba lagi."}"
+                    )
                 }
             }
         }
     }
-
-    // Explicit high-contrast text color (Colors.black87)
-    val inputBlack87 = Color(0xDE000000)
 
     BoxWithConstraints(
         modifier = Modifier
@@ -321,8 +344,8 @@ fun AuthScreen(
                     value = email,
                     onValueChange = { email = it },
                     textStyle = TextStyle(
-                        color = inputBlack87,
-                        fontSize = 15.sp,
+                        color = Color(0xFF0F172A),
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     ),
                     placeholder = { Text("nama@gmail.com", color = Color(0xFF94A3B8)) },
@@ -334,15 +357,7 @@ fun AuthScreen(
                         .fillMaxWidth()
                         .testTag("input_email"),
                     shape = RoundedCornerShape(26.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = inputBlack87,
-                        unfocusedTextColor = inputBlack87,
-                        focusedBorderColor = KubeBlueBright,
-                        unfocusedBorderColor = Color(0xFFCFD8DC),
-                        focusedPlaceholderColor = Color(0xFF94A3B8),
-                        unfocusedPlaceholderColor = Color(0xFF94A3B8),
-                        cursorColor = KubeBlueBright
-                    ),
+                    colors = kubeLightTextFieldColors(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Email,
                         imeAction = ImeAction.Next
@@ -363,8 +378,8 @@ fun AuthScreen(
                     value = password,
                     onValueChange = { password = it },
                     textStyle = TextStyle(
-                        color = inputBlack87,
-                        fontSize = 15.sp,
+                        color = Color(0xFF0F172A),
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Medium
                     ),
                     placeholder = { Text("••••••••", color = Color(0xFF94A3B8)) },
@@ -386,15 +401,7 @@ fun AuthScreen(
                         .fillMaxWidth()
                         .testTag("input_password"),
                     shape = RoundedCornerShape(26.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = inputBlack87,
-                        unfocusedTextColor = inputBlack87,
-                        focusedBorderColor = KubeBlueBright,
-                        unfocusedBorderColor = Color(0xFFCFD8DC),
-                        focusedPlaceholderColor = Color(0xFF94A3B8),
-                        unfocusedPlaceholderColor = Color(0xFF94A3B8),
-                        cursorColor = KubeBlueBright
-                    ),
+                    colors = kubeLightTextFieldColors(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Password,
                         imeAction = if (isSignUp) ImeAction.Next else ImeAction.Done
@@ -416,8 +423,8 @@ fun AuthScreen(
                             value = confirmPassword,
                             onValueChange = { confirmPassword = it },
                             textStyle = TextStyle(
-                                color = inputBlack87,
-                                fontSize = 15.sp,
+                                color = Color(0xFF0F172A),
+                                fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium
                             ),
                             placeholder = { Text("••••••••", color = Color(0xFF94A3B8)) },
@@ -439,15 +446,7 @@ fun AuthScreen(
                                 .fillMaxWidth()
                                 .testTag("input_confirm_password"),
                             shape = RoundedCornerShape(26.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = inputBlack87,
-                                unfocusedTextColor = inputBlack87,
-                                focusedBorderColor = KubeBlueBright,
-                                unfocusedBorderColor = Color(0xFFCFD8DC),
-                                focusedPlaceholderColor = Color(0xFF94A3B8),
-                                unfocusedPlaceholderColor = Color(0xFF94A3B8),
-                                cursorColor = KubeBlueBright
-                            ),
+                            colors = kubeLightTextFieldColors(),
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Password,
                                 imeAction = ImeAction.Done
@@ -472,7 +471,8 @@ fun AuthScreen(
                             },
                             colors = CheckboxDefaults.colors(
                                 checkedColor = KubeBlueBright
-                            )
+                            ),
+                            modifier = Modifier.testTag("checkbox_remember_me")
                         )
                         Text(
                             text = if (isSignUp) "Agree To Terms & Privacy" else "Remember me",
@@ -488,9 +488,10 @@ fun AuthScreen(
                             fontWeight = FontWeight.Medium,
                             color = KubeTextMuted,
                             modifier = Modifier.clickable {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Kata sandi dikelola Admin Kube. Hubungi Dispatcher untuk reset akses.")
-                                }
+                                KubeFeedbackManager.showInfo(
+                                    "Reset Kata Sandi",
+                                    "Kata sandi dikelola Admin Kube. Hubungi Dispatcher untuk reset akses."
+                                )
                             }
                         )
                     }
@@ -558,11 +559,10 @@ fun AuthScreen(
                     // Google Button
                     OutlinedButton(
                         onClick = {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar(
-                                    "Gunakan Email & Kata Sandi akun kurir yang terdaftar di Supabase."
-                                )
-                            }
+                            KubeFeedbackManager.showInfo(
+                                "Login Akun Kurir",
+                                "Gunakan Email & Kata Sandi akun kurir yang terdaftar di Supabase."
+                            )
                         },
                         modifier = Modifier
                             .weight(1f)
@@ -597,11 +597,10 @@ fun AuthScreen(
                     // Apple Button
                     OutlinedButton(
                         onClick = {
-                            coroutineScope.launch {
-                                snackbarHostState.showSnackbar(
-                                    "Gunakan Email & Kata Sandi akun kurir yang terdaftar di Supabase."
-                                )
-                            }
+                            KubeFeedbackManager.showInfo(
+                                "Login Akun Kurir",
+                                "Gunakan Email & Kata Sandi akun kurir yang terdaftar di Supabase."
+                            )
                         },
                         modifier = Modifier
                             .weight(1f)
@@ -661,14 +660,6 @@ fun AuthScreen(
             }
         }
         }
-
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(16.dp)
-        )
     }
 }
 

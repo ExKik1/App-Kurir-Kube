@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.Message
@@ -50,8 +51,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.window.Dialog
-import com.example.core.components.LiquidDarkGlassCard
+import com.example.core.components.DarkObsidianGlassCard
+import com.example.core.components.InAppChatBottomSheet
 import com.example.core.network.CourierSupabaseService
 import com.example.core.network.SupportContactRecord
 import com.example.core.repository.OrderRepository
@@ -66,29 +72,39 @@ import com.example.ui.theme.KubeGreen
  */
 @Composable
 fun SupportGlassDialog(
+    onOpenAdminLiveChat: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val courier by OrderRepository.instance.courier.collectAsState()
     val supportContacts by CourierSupabaseService.instance.supportContacts.collectAsState()
+    var showInternalAdminChat by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         runCatching { CourierSupabaseService.instance.syncAllTablesOnce() }
     }
 
+    if (showInternalAdminChat) {
+        InAppChatBottomSheet(
+            title = "Admin Operasional Kube",
+            subtitle = "Live Chat Operasional & Dispatcher",
+            roomType = "courier_admin",
+            onDismiss = { showInternalAdminChat = false }
+        )
+    }
+
     Dialog(onDismissRequest = onDismiss) {
-        LiquidDarkGlassCard(
+        DarkObsidianGlassCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
                 .testTag("dialog_bantuan_admin"),
-            shape = RoundedCornerShape(26.dp),
-            elevation = 8.dp
+            shape = RoundedCornerShape(26.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(6.dp)
+                    .padding(20.dp)
             ) {
                 // Header with icon and close button
                 Row(
@@ -159,6 +175,42 @@ fun SupportGlassDialog(
                         color = Color.White.copy(alpha = 0.90f),
                         lineHeight = 16.sp,
                         modifier = Modifier.padding(12.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Primary CTA: Live Chat Admin di Aplikasi
+                Button(
+                    onClick = {
+                        if (onOpenAdminLiveChat != null) {
+                            onOpenAdminLiveChat()
+                        } else {
+                            showInternalAdminChat = true
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0096C7),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 50.dp)
+                        .testTag("btn_live_chat_admin")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Chat,
+                        contentDescription = "Live Chat Admin",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Live Chat Admin di Aplikasi",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                 }
 

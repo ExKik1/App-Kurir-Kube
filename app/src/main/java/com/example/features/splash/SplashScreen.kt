@@ -35,36 +35,50 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.core.network.CourierSessionStorage
+import com.example.core.network.CourierSupabaseService
 import com.example.ui.theme.KubeBlueBright
 import com.example.ui.theme.KubeGreen
 import com.example.ui.theme.KubeSkyGradient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 
 @Composable
 fun SplashScreen(
+    onAutoLoginSuccess: () -> Unit = {},
     onSplashFinished: () -> Unit
 ) {
+    val context = LocalContext.current
     val progress = remember { Animatable(0.05f) }
     val logoScale = remember { Animatable(0.85f) }
 
     LaunchedEffect(Unit) {
+        val restoreDeferred = async(Dispatchers.IO) {
+            CourierSupabaseService.instance.restoreSessionIfRemembered(context)
+        }
         logoScale.animateTo(
             targetValue = 1.0f,
-            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 700, easing = FastOutSlowInEasing)
         )
         progress.animateTo(
             targetValue = 1.0f,
-            animationSpec = tween(durationMillis = 1800, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 1200, easing = FastOutSlowInEasing)
         )
-        delay(200)
-        // Transitions cleanly with pushReplacement semantics
-        onSplashFinished()
+        val restoreResult = restoreDeferred.await()
+        if (restoreResult.isSuccess) {
+            onAutoLoginSuccess()
+        } else {
+            delay(150)
+            onSplashFinished()
+        }
     }
 
     Box(
@@ -73,7 +87,11 @@ fun SplashScreen(
             .background(KubeSkyGradient)
             .statusBarsPadding()
             .navigationBarsPadding()
-            .clickable(onClick = onSplashFinished)
+            .clickable {
+                if (CourierSessionStorage.getSavedSession(context) == null) {
+                    onSplashFinished()
+                }
+            }
             .testTag("splash_screen"),
         contentAlignment = Alignment.Center
     ) {
